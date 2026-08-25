@@ -1,3 +1,5 @@
+import json
+
 from app.agents.requirements import RequirementsAgent
 from app.core.models import (
     AgentRole,
@@ -5,6 +7,35 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+
+
+class FakeLLMClient:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        return json.dumps(
+            {
+                "objective": "Build a RAG application",
+                "functional_requirements": [
+                    "Upload PDF documents",
+                    "Answer questions from documents",
+                ],
+                "non_functional_requirements": [
+                    "Responses should be fast",
+                ],
+                "constraints": [
+                    "Use free tools",
+                ],
+                "assumptions": [
+                    "Documents contain readable text",
+                ],
+                "acceptance_criteria": [
+                    "Answers include source citations",
+                ],
+            }
+        )
 
 
 def test_requirements_agent_returns_artifact():
@@ -18,7 +49,9 @@ def test_requirements_agent_returns_artifact():
         assigned_agent=AgentRole.REQUIREMENTS,
     )
 
-    agent = RequirementsAgent()
+    agent = RequirementsAgent(
+        llm_client=FakeLLMClient()
+    )
 
     artifact = agent.execute(
         task,
@@ -27,7 +60,12 @@ def test_requirements_agent_returns_artifact():
 
     assert artifact.type == ArtifactType.REQUIREMENTS
     assert artifact.created_by == AgentRole.REQUIREMENTS
-    assert artifact.content["original_request"] == (
-        "Build a RAG application"
+
+    assert (
+        artifact.content["objective"]
+        == "Build a RAG application"
     )
 
+    assert len(
+        artifact.content["acceptance_criteria"]
+    ) > 0

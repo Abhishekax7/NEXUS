@@ -2,7 +2,6 @@ import pytest
 
 from app.agents.base import BaseAgent
 from app.agents.registry import AgentRegistry
-from app.agents.requirements import RequirementsAgent
 from app.core.models import (
     AgentRole,
     AgentTask,
@@ -12,6 +11,24 @@ from app.core.models import (
 )
 from app.core.runner import AgentRunner
 from app.core.state import NexusState
+
+
+class SuccessfulAgent(BaseAgent):
+    role = AgentRole.REQUIREMENTS
+
+    def execute(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> Artifact:
+        return Artifact(
+            type=ArtifactType.REQUIREMENTS,
+            name="test_requirements",
+            content={
+                "objective": "Test objective",
+            },
+            created_by=self.role,
+        )
 
 
 class FailingAgent(BaseAgent):
@@ -27,7 +44,7 @@ class FailingAgent(BaseAgent):
         )
 
 
-def create_task():
+def create_task() -> AgentTask:
     return AgentTask(
         title="Analyze requirements",
         description="Analyze the user request.",
@@ -35,13 +52,19 @@ def create_task():
     )
 
 
-def test_runner_executes_registered_agent():
+def build_success_registry() -> AgentRegistry:
     registry = AgentRegistry()
 
     registry.register(
         AgentRole.REQUIREMENTS,
-        RequirementsAgent,
+        SuccessfulAgent,
     )
+
+    return registry
+
+
+def test_runner_executes_registered_agent():
+    registry = build_success_registry()
 
     runner = AgentRunner(registry)
 
@@ -59,15 +82,11 @@ def test_runner_executes_registered_agent():
     )
 
     assert artifact.type == ArtifactType.REQUIREMENTS
+    assert artifact.created_by == AgentRole.REQUIREMENTS
 
 
 def test_runner_marks_task_completed():
-    registry = AgentRegistry()
-
-    registry.register(
-        AgentRole.REQUIREMENTS,
-        RequirementsAgent,
-    )
+    registry = build_success_registry()
 
     runner = AgentRunner(registry)
 
@@ -88,12 +107,7 @@ def test_runner_marks_task_completed():
 
 
 def test_runner_stores_artifact():
-    registry = AgentRegistry()
-
-    registry.register(
-        AgentRole.REQUIREMENTS,
-        RequirementsAgent,
-    )
+    registry = build_success_registry()
 
     runner = AgentRunner(registry)
 
@@ -115,12 +129,7 @@ def test_runner_stores_artifact():
 
 
 def test_runner_clears_active_task():
-    registry = AgentRegistry()
-
-    registry.register(
-        AgentRole.REQUIREMENTS,
-        RequirementsAgent,
-    )
+    registry = build_success_registry()
 
     runner = AgentRunner(registry)
 
@@ -170,6 +179,4 @@ def test_runner_marks_failed_agent():
     assert task.status == TaskStatus.FAILED
     assert task.error == "Simulated agent failure"
     assert len(state.errors) == 1
-
-
-
+    assert state.active_task_id is None

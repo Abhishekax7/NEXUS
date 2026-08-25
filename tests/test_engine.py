@@ -1,5 +1,6 @@
 import pytest
 
+from app.agents.base import BaseAgent
 from app.agents.orchestrator import OrchestratorAgent
 from app.agents.placeholders import (
     ArchitectAgent,
@@ -10,7 +11,6 @@ from app.agents.placeholders import (
     TesterAgent,
 )
 from app.agents.registry import AgentRegistry
-from app.agents.requirements import RequirementsAgent
 from app.core.engine import (
     NexusEngine,
     WorkflowStalled,
@@ -18,9 +18,29 @@ from app.core.engine import (
 from app.core.models import (
     AgentRole,
     AgentTask,
+    Artifact,
+    ArtifactType,
     TaskStatus,
 )
 from app.core.state import NexusState
+
+
+class TestRequirementsAgent(BaseAgent):
+    role = AgentRole.REQUIREMENTS
+
+    def execute(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> Artifact:
+        return Artifact(
+            type=ArtifactType.REQUIREMENTS,
+            name="requirements_test_output",
+            content={
+                "objective": "Deterministic test objective",
+            },
+            created_by=self.role,
+        )
 
 
 def build_registry():
@@ -28,28 +48,34 @@ def build_registry():
 
     registry.register(
         AgentRole.REQUIREMENTS,
-        RequirementsAgent,
+        TestRequirementsAgent,
     )
+
     registry.register(
         AgentRole.RESEARCH,
         ResearchAgent,
     )
+
     registry.register(
         AgentRole.ARCHITECT,
         ArchitectAgent,
     )
+
     registry.register(
         AgentRole.CODER,
         CoderAgent,
     )
+
     registry.register(
         AgentRole.TESTER,
         TesterAgent,
     )
+
     registry.register(
         AgentRole.SECURITY,
         SecurityAgent,
     )
+
     registry.register(
         AgentRole.CRITIC,
         CriticAgent,
@@ -135,14 +161,18 @@ def test_engine_detects_stalled_workflow():
         title="Blocked task",
         description="Depends on missing task",
         assigned_agent=AgentRole.CODER,
-        dependencies=["missing-task-id"],
+        dependencies=[
+            "missing-task-id"
+        ],
     )
 
     state.add_task(blocked_task)
 
     engine = NexusEngine(registry)
 
-    with pytest.raises(WorkflowStalled):
+    with pytest.raises(
+        WorkflowStalled
+    ):
         engine.run(state)
 
     assert state.failed is True
