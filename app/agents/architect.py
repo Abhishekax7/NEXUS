@@ -51,6 +51,10 @@ class ArchitectureDesign(BaseModel):
         min_length=1
     )
 
+    research_influences: list[str] = Field(
+        min_length=1
+    )
+
 
 class ArchitectureGenerationError(Exception):
     """Raised when architecture output cannot be validated."""
@@ -65,15 +69,25 @@ class ArchitectAgent(BaseAgent):
         max_validation_retries: int = 2,
     ):
         self.llm = llm_client or LLMClient()
+
         self.max_validation_retries = (
             max_validation_retries
         )
 
-    def _get_requirements(
+    def _get_artifact_content(
         self,
         task: AgentTask,
         state: NexusState,
+        artifact_type: ArtifactType,
     ) -> dict:
+        """
+        Prefer explicit task inputs.
+
+        Fall back to state lookup so the agent can
+        still be executed independently in tests
+        or manual smoke tests.
+        """
+
         for artifact_id in task.input_artifact_ids:
             artifact = state.artifacts.get(
                 artifact_id
@@ -81,27 +95,25 @@ class ArchitectAgent(BaseAgent):
 
             if (
                 artifact
-                and artifact.type
-                == ArtifactType.REQUIREMENTS
+                and artifact.type == artifact_type
             ):
                 return artifact.content
 
         for artifact in state.artifacts.values():
-            if (
-                artifact.type
-                == ArtifactType.REQUIREMENTS
-            ):
+            if artifact.type == artifact_type:
                 return artifact.content
 
         raise ArchitectureGenerationError(
-            "Requirements artifact not found."
+            f"{artifact_type.value} artifact not found."
         )
 
     def _validate_output(
         self,
         raw_output: str,
     ) -> ArchitectureDesign:
-        parsed = json.loads(raw_output)
+        parsed = json.loads(
+            raw_output
+        )
 
         return ArchitectureDesign.model_validate(
             parsed
@@ -112,24 +124,38 @@ class ArchitectAgent(BaseAgent):
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-        requirements = self._get_requirements(
+        requirements = self._get_artifact_content(
             task,
             state,
+            ArtifactType.REQUIREMENTS,
+        )
+
+        research = self._get_artifact_content(
+            task,
+            state,
+            ArtifactType.RESEARCH,
         )
 
         system_prompt = (
-            "You are the Architect Agent inside NEXUS. "
-            "Design technically strong, modular software "
-            "architectures from validated requirements. "
-            "Return machine-valid JSON only."
+            "You are the Architect Agent inside NEXUS, "
+            "an autonomous AI software engineering system. "
+            "Design technically strong architectures using "
+            "both validated requirements and evidence-backed "
+            "technical research. Return valid JSON only."
         )
 
         prompt = f"""
-Design the software architecture for these requirements:
+VALIDATED REQUIREMENTS:
 
 {json.dumps(requirements, indent=2)}
 
-Return exactly one JSON object with:
+EVIDENCE-BACKED RESEARCH:
+
+{json.dumps(research, indent=2)}
+
+Design the software architecture using BOTH inputs.
+
+Return exactly one JSON object containing:
 
 architecture_style
 components
@@ -138,23 +164,45 @@ technology_stack
 interfaces
 security_considerations
 design_decisions
+research_influences
 
 Rules:
 
 - architecture_style must be a non-empty string
+
 - components must be a non-empty array of objects
-- every component object must contain:
+
+- every component must contain:
   name
   responsibility
   technology
-- data_flow must describe execution between components
+
+- data_flow must explain how components interact
+
 - technology_stack must contain concrete technologies
-- interfaces must describe important boundaries or APIs
+
+- interfaces must describe APIs or component boundaries
+
 - security_considerations must be non-empty
-- design_decisions must explain important architectural choices
-- prefer free and open-source technologies where practical
-- every field is mandatory
+
+- design_decisions must explain important choices
+
+- research_influences must explain which architectural
+  choices were influenced by the supplied research
+
+- use the supplied research as evidence
+
+- do not invent external research sources
+
+- respect constraints from the requirements
+
+- prefer free/open-source technologies where required
+
+- every field is mandatory and non-empty
+
 - do not return markdown
+
+- do not return text outside the JSON object
 """
 
         last_error = None
@@ -181,6 +229,10 @@ Rules:
                     metadata={
                         "validation_attempts":
                             attempt + 1,
+                        "grounded_in_requirements":
+                            True,
+                        "grounded_in_research":
+                            True,
                     },
                 )
 
@@ -191,17 +243,19 @@ Rules:
                 last_error = exc
 
                 prompt = f"""
-The previous architecture failed validation.
+The previous architecture response failed validation.
 
 ERROR:
+
 {exc}
 
 PREVIOUS RESPONSE:
+
 {raw_output}
 
-Repair it and return ONLY a complete JSON object.
+Repair the architecture.
 
-Required fields:
+Return ONLY one complete JSON object containing:
 
 architecture_style
 components
@@ -210,8 +264,12 @@ technology_stack
 interfaces
 security_considerations
 design_decisions
+research_influences
 
 Every field is mandatory and non-empty.
+
+The architecture must remain grounded in BOTH
+the validated requirements and supplied research.
 """
 
         raise ArchitectureGenerationError(
