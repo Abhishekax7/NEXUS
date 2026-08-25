@@ -180,3 +180,167 @@ def test_runner_marks_failed_agent():
     assert task.error == "Simulated agent failure"
     assert len(state.errors) == 1
     assert state.active_task_id is None
+    
+def test_runner_attaches_dependency_artifacts():
+    registry = build_success_registry()
+
+    runner = AgentRunner(registry)
+
+    state = NexusState(
+        user_request="Build an application"
+    )
+
+    dependency_task = AgentTask(
+        title="Previous task",
+        description="Produce dependency artifact.",
+        assigned_agent=AgentRole.REQUIREMENTS,
+    )
+
+    dependency_artifact = Artifact(
+        type=ArtifactType.REQUIREMENTS,
+        name="dependency_output",
+        content={
+            "objective": "Dependency output",
+        },
+        created_by=AgentRole.REQUIREMENTS,
+    )
+
+    state.add_task(
+        dependency_task
+    )
+
+    state.add_artifact(
+        dependency_artifact
+    )
+
+    dependency_task.output_artifact_ids.append(
+        dependency_artifact.id
+    )
+
+    task = AgentTask(
+        title="Dependent task",
+        description="Consumes dependency output.",
+        assigned_agent=AgentRole.REQUIREMENTS,
+        dependencies=[
+            dependency_task.id
+        ],
+    )
+
+    state.add_task(task)
+
+    runner.run_task(
+        task,
+        state,
+    )
+
+    assert (
+        dependency_artifact.id
+        in task.input_artifact_ids
+    )
+
+
+def test_dependency_artifact_is_not_duplicated():
+    registry = build_success_registry()
+
+    runner = AgentRunner(registry)
+
+    state = NexusState(
+        user_request="Build an application"
+    )
+
+    dependency_task = AgentTask(
+        title="Previous task",
+        description="Produce output.",
+        assigned_agent=AgentRole.REQUIREMENTS,
+    )
+
+    dependency_artifact = Artifact(
+        type=ArtifactType.REQUIREMENTS,
+        name="dependency_output",
+        content={
+            "objective": "Dependency output",
+        },
+        created_by=AgentRole.REQUIREMENTS,
+    )
+
+    state.add_task(
+        dependency_task
+    )
+
+    state.add_artifact(
+        dependency_artifact
+    )
+
+    dependency_task.output_artifact_ids.append(
+        dependency_artifact.id
+    )
+
+    task = AgentTask(
+        title="Dependent task",
+        description="Consume output.",
+        assigned_agent=AgentRole.REQUIREMENTS,
+        dependencies=[
+            dependency_task.id
+        ],
+        input_artifact_ids=[
+            dependency_artifact.id
+        ],
+    )
+
+    state.add_task(task)
+
+    runner.run_task(
+        task,
+        state,
+    )
+
+    assert (
+        task.input_artifact_ids.count(
+            dependency_artifact.id
+        )
+        == 1
+    )
+
+
+def test_runner_preserves_artifact_provenance():
+    registry = build_success_registry()
+
+    runner = AgentRunner(registry)
+
+    state = NexusState(
+        user_request="Build an application"
+    )
+
+    first_task = create_task()
+
+    state.add_task(
+        first_task
+    )
+
+    first_artifact = runner.run_task(
+        first_task,
+        state,
+    )
+
+    second_task = AgentTask(
+        title="Consume previous output",
+        description="Use previous artifact.",
+        assigned_agent=AgentRole.REQUIREMENTS,
+        dependencies=[
+            first_task.id
+        ],
+    )
+
+    state.add_task(
+        second_task
+    )
+
+    runner.run_task(
+        second_task,
+        state,
+    )
+
+    assert (
+        first_artifact.id
+        in second_task.input_artifact_ids
+    )

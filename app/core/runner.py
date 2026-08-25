@@ -12,6 +12,35 @@ class AgentRunner:
     def __init__(self, registry: AgentRegistry):
         self.registry = registry
 
+    def _attach_dependency_artifacts(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> None:
+        """
+        Attach artifacts produced by dependency tasks
+        as explicit inputs to the current task.
+        """
+
+        for dependency_id in task.dependencies:
+            dependency_task = state.get_task(
+                dependency_id
+            )
+
+            if dependency_task is None:
+                continue
+
+            for artifact_id in (
+                dependency_task.output_artifact_ids
+            ):
+                if (
+                    artifact_id
+                    not in task.input_artifact_ids
+                ):
+                    task.input_artifact_ids.append(
+                        artifact_id
+                    )
+
     def run_task(
         self,
         task: AgentTask,
@@ -19,6 +48,11 @@ class AgentRunner:
     ):
         agent = self.registry.get_agent(
             task.assigned_agent
+        )
+
+        self._attach_dependency_artifacts(
+            task,
+            state,
         )
 
         start_task(task)
@@ -31,7 +65,9 @@ class AgentRunner:
                 state,
             )
 
-            state.add_artifact(artifact)
+            state.add_artifact(
+                artifact
+            )
 
             task.output_artifact_ids.append(
                 artifact.id
