@@ -11,10 +11,7 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
-from app.tools.executor import (
-    CommandExecutor,
-    ExecutionResult,
-)
+from app.tools.executor import CommandExecutor
 from app.tools.workspace import WorkspaceWriter
 
 
@@ -128,6 +125,66 @@ class TesterAgent(BaseAgent):
 
         return commands
 
+    def _get_workspace(
+        self,
+        state: NexusState,
+    ) -> Path:
+        return (
+            self.workspace_writer.root
+            / state.run_id
+        ).resolve()
+
+    def _workspace_needs_materialization(
+        self,
+        code_artifact: Artifact,
+        state: NexusState,
+    ) -> bool:
+        """
+        Materialize generated code only when the run workspace
+        does not already contain the generated files.
+
+        This prevents a retest from overwriting debugger patches.
+        """
+
+        workspace = self._get_workspace(
+            state
+        )
+
+        if not workspace.exists():
+            return True
+
+        files = code_artifact.content.get(
+            "files",
+            []
+        )
+
+        if not isinstance(files, list):
+            return True
+
+        for file_data in files:
+            if not isinstance(file_data, dict):
+                return True
+
+            relative_path = file_data.get(
+                "path"
+            )
+
+            if not isinstance(
+                relative_path,
+                str,
+            ):
+                return True
+
+            target = (
+                workspace
+                / relative_path
+            )
+
+            if not target.exists():
+                return True
+
+        return False
+
     def execute(
         self,
         task: AgentTask,
@@ -138,23 +195,40 @@ class TesterAgent(BaseAgent):
             state,
         )
 
-        written_files = (
-            self.workspace_writer
-            .write_code_artifact(
-                code_artifact,
-                state,
-            )
+        workspace = self._get_workspace(
+            state
         )
 
-        if not written_files:
-            raise TestingError(
-                "No generated files were written."
+        materialized = False
+        written_file_count = 0
+
+        if self._workspace_needs_materialization(
+            code_artifact,
+            state,
+        ):
+            written_files = (
+                self.workspace_writer
+                .write_code_artifact(
+                    code_artifact,
+                    state,
+                )
             )
 
-        workspace = (
-            self.workspace_writer.root
-            / state.run_id
-        ).resolve()
+            if not written_files:
+                raise TestingError(
+                    "No generated files were written."
+                )
+
+            written_file_count = len(
+                written_files
+            )
+
+            materialized = True
+
+        if not workspace.exists():
+            raise TestingError(
+                "Generated workspace does not exist."
+            )
 
         commands = self._get_test_commands(
             code_artifact
@@ -231,9 +305,12 @@ class TesterAgent(BaseAgent):
             content=report.model_dump(),
             created_by=self.role,
             metadata={
-                "workspace": str(workspace),
+                "workspace": str(
+                    workspace
+                ),
                 "written_file_count":
-                    len(written_files),
+                    written_file_count,
+                "workspace_materialized":
+                    materialized,
             },
         )
-
