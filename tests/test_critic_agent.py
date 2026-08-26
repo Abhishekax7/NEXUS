@@ -13,12 +13,15 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+from app.memory.retriever import MemoryRetriever
+from app.memory.store import MemoryStore
 
 
 class FakeLLM:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = 0
+        self.last_user_prompt = None
 
     def generate(
         self,
@@ -26,6 +29,8 @@ class FakeLLM:
         user_prompt,
         json_mode=False,
     ):
+        self.last_user_prompt = user_prompt
+
         response = self.responses[
             min(
                 self.calls,
@@ -55,7 +60,8 @@ def create_artifact(
 def build_complete_state():
     state = NexusState(
         user_request=(
-            "Build a secure API with tests."
+            "Build a secure FastAPI service "
+            "with tests."
         )
     )
 
@@ -64,10 +70,14 @@ def build_complete_state():
         "requirements",
         {
             "objective": (
-                "Build a secure tested API."
+                "Build a secure tested "
+                "FastAPI service."
             ),
             "functional_requirements": [
                 "Expose a health endpoint.",
+            ],
+            "constraints": [
+                "Use free tools.",
             ],
             "acceptance_criteria": [
                 "Tests must pass.",
@@ -80,7 +90,9 @@ def build_complete_state():
         ArtifactType.ARCHITECTURE,
         "architecture",
         {
-            "architecture_style": "modular",
+            "architecture_style": (
+                "Modular FastAPI architecture"
+            ),
             "components": [
                 {
                     "name": "API",
@@ -89,6 +101,10 @@ def build_complete_state():
                     ),
                     "technology": "FastAPI",
                 }
+            ],
+            "technology_stack": [
+                "Python",
+                "FastAPI",
             ],
         },
         AgentRole.ARCHITECT,
@@ -119,14 +135,24 @@ def build_complete_state():
         "test_result",
         {
             "passed": True,
-            "commands": [
+            "total_commands": 1,
+            "passed_commands": 1,
+            "failed_commands": 0,
+            "results": [
                 {
                     "command": "pytest -v",
-                    "returncode": 0,
+                    "exit_code": 0,
                     "stdout": "3 passed",
                     "stderr": "",
+                    "timed_out": False,
+                    "passed": True,
                 }
             ],
+            "failed_command_names": [],
+            "summary": (
+                "All generated test "
+                "commands passed."
+            ),
         },
         AgentRole.TESTER,
     )
@@ -176,6 +202,21 @@ def create_critic_task(
             artifact.id
             for artifact in artifacts
         ],
+    )
+
+
+def build_retriever(
+    tmp_path,
+):
+    store = MemoryStore(
+        db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    return store, MemoryRetriever(
+        store
     )
 
 
@@ -341,6 +382,43 @@ def test_critic_agent_records_metadata():
     )
 
 
+def test_critic_without_memory_preserves_old_behavior():
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    agent = CriticAgent(
+        llm_client=FakeLLM(
+            [
+                valid_accept_response()
+            ]
+        )
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_augmented"
+        ]
+        is False
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_context_count"
+        ]
+        == 0
+    )
+
+
 def test_critic_agent_accepts_revise_verdict():
     state, artifacts = (
         build_complete_state()
@@ -386,6 +464,371 @@ def test_critic_agent_accepts_revise_verdict():
             "issue_count"
         ]
         == 1
+    )
+
+
+def test_critic_injects_previous_critic_feedback(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="critic",
+        key="previous_quality_gate",
+        value={
+            "verdict": "revise",
+            "quality_score": 68,
+            "summary": (
+                "FastAPI service had weak "
+                "input validation."
+            ),
+            "required_improvements": [
+                "Add strict request validation."
+            ],
+        },
+    )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    fake_llm = FakeLLM(
+        [
+            valid_accept_response()
+        ]
+    )
+
+    agent = CriticAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_augmented"
+        ]
+        is True
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_context_count"
+        ]
+        >= 1
+    )
+
+    assert (
+        "previous_quality_gate"
+        in fake_llm.last_user_prompt
+    )
+
+    assert (
+        "Add strict request validation"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_critic_injects_previous_security_feedback(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="security",
+        key="previous_security_review",
+        value={
+            "risk_score": 75,
+            "summary": (
+                "FastAPI service exposed "
+                "unsafe user input."
+            ),
+            "findings": [
+                "Missing input validation."
+            ],
+        },
+    )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    fake_llm = FakeLLM(
+        [
+            valid_accept_response()
+        ]
+    )
+
+    agent = CriticAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_augmented"
+        ]
+        is True
+    )
+
+    assert (
+        "unsafe user input"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_critic_injects_previous_failure_or_repair(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="repair",
+        key="fastapi_repair",
+        value={
+            "root_cause": (
+                "FastAPI endpoint validation "
+                "was missing."
+            ),
+            "failure_summary": (
+                "API validation tests failed."
+            ),
+        },
+    )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    fake_llm = FakeLLM(
+        [
+            valid_accept_response()
+        ]
+    )
+
+    agent = CriticAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_augmented"
+        ]
+        is True
+    )
+
+    assert (
+        "fastapi_repair"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_critic_excludes_current_run_memory(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    store.save(
+        run_id=state.run_id,
+        memory_type="critic",
+        key="current_run_feedback",
+        value={
+            "summary": (
+                "FastAPI current run feedback"
+            ),
+            "required_improvements": [
+                "Current run only."
+            ],
+        },
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    fake_llm = FakeLLM(
+        [
+            valid_accept_response()
+        ]
+    )
+
+    agent = CriticAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        "current_run_feedback"
+        not in fake_llm.last_user_prompt
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_context_count"
+        ]
+        == 0
+    )
+
+
+def test_critic_does_not_inject_irrelevant_memory(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="critic",
+        key="space_telescope_feedback",
+        value={
+            "summary": (
+                "Quantum astrophysics "
+                "telescope calibration."
+            ),
+            "required_improvements": [
+                "Adjust telescope optics."
+            ],
+        },
+    )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    fake_llm = FakeLLM(
+        [
+            valid_accept_response()
+        ]
+    )
+
+    agent = CriticAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_augmented"
+        ]
+        is False
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_context_count"
+        ]
+        == 0
+    )
+
+
+def test_critic_respects_memory_limit(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    for index in range(6):
+        store.save(
+            run_id=f"old-run-{index}",
+            memory_type="critic",
+            key=f"fastapi_feedback_{index}",
+            value={
+                "summary": (
+                    "FastAPI service quality "
+                    "and security validation."
+                ),
+                "required_improvements": [
+                    "Improve API validation."
+                ],
+            },
+        )
+
+    state, artifacts = (
+        build_complete_state()
+    )
+
+    task = create_critic_task(
+        artifacts
+    )
+
+    agent = CriticAgent(
+        llm_client=FakeLLM(
+            [
+                valid_accept_response()
+            ]
+        ),
+        memory_retriever=retriever,
+        memory_limit=2,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata[
+            "memory_context_count"
+        ]
+        <= 2
     )
 
 

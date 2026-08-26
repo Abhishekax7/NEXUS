@@ -16,6 +16,7 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+from app.memory.retriever import MemoryRetriever
 
 
 Verdict = Literal[
@@ -95,15 +96,27 @@ class CriticAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Optional[LLMClient] = None,
+        memory_retriever: Optional[
+            MemoryRetriever
+        ] = None,
         max_validation_retries: int = 2,
+        memory_limit: int = 4,
     ):
         self.llm = (
             llm_client
             or LLMClient()
         )
 
+        self.memory_retriever = (
+            memory_retriever
+        )
+
         self.max_validation_retries = (
             max_validation_retries
+        )
+
+        self.memory_limit = (
+            memory_limit
         )
 
     def _collect_artifacts(
@@ -111,7 +124,6 @@ class CriticAgent(BaseAgent):
         task: AgentTask,
         state: NexusState,
     ) -> dict[ArtifactType, Artifact]:
-
         collected = {}
 
         for artifact_id in task.input_artifact_ids:
@@ -147,7 +159,8 @@ class CriticAgent(BaseAgent):
         if missing:
             names = sorted(
                 artifact_type.value
-                for artifact_type in missing
+                for artifact_type
+                in missing
             )
 
             raise CriticGenerationError(
@@ -161,7 +174,6 @@ class CriticAgent(BaseAgent):
         self,
         raw_output: str,
     ) -> QualityGateReport:
-
         parsed = json.loads(
             raw_output
         )
@@ -213,12 +225,143 @@ class CriticAgent(BaseAgent):
 
         return report
 
+    def _build_memory_query(
+        self,
+        state: NexusState,
+        artifacts: dict[
+            ArtifactType,
+            Artifact,
+        ],
+    ) -> str:
+        requirements = artifacts[
+            ArtifactType.REQUIREMENTS
+        ].content
+
+        architecture = artifacts[
+            ArtifactType.ARCHITECTURE
+        ].content
+
+        security = artifacts[
+            ArtifactType.SECURITY_REPORT
+        ].content
+
+        parts = [
+            state.user_request,
+            str(
+                requirements.get(
+                    "objective",
+                    "",
+                )
+            ),
+            str(
+                architecture.get(
+                    "architecture_style",
+                    "",
+                )
+            ),
+            str(
+                security.get(
+                    "summary",
+                    "",
+                )
+            ),
+        ]
+
+        technology_stack = (
+            architecture.get(
+                "technology_stack",
+                [],
+            )
+        )
+
+        if isinstance(
+            technology_stack,
+            list,
+        ):
+            parts.extend(
+                str(item)
+                for item
+                in technology_stack
+            )
+
+        return " ".join(
+            part
+            for part
+            in parts
+            if part
+        )
+
+    def _retrieve_memory_context(
+        self,
+        state: NexusState,
+        artifacts: dict[
+            ArtifactType,
+            Artifact,
+        ],
+    ) -> list[dict]:
+        if self.memory_retriever is None:
+            return []
+
+        query = self._build_memory_query(
+            state,
+            artifacts,
+        )
+
+        if not query.strip():
+            return []
+
+        results = (
+            self.memory_retriever.retrieve(
+                query=query,
+                limit=self.memory_limit,
+                memory_types=[
+                    "critic",
+                    "security",
+                    "artifact",
+                    "failure",
+                    "repair",
+                ],
+                exclude_run_id=state.run_id,
+            )
+        )
+
+        memories = []
+
+        for result in results:
+            memories.append(
+                {
+                    "score":
+                        result.score,
+                    "memory_type":
+                        result.memory[
+                            "memory_type"
+                        ],
+                    "run_id":
+                        result.memory[
+                            "run_id"
+                        ],
+                    "key":
+                        result.memory[
+                            "key"
+                        ],
+                    "value":
+                        result.memory[
+                            "value"
+                        ],
+                    "metadata":
+                        result.memory[
+                            "metadata"
+                        ],
+                }
+            )
+
+        return memories
+
     def execute(
         self,
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-
         artifacts = self._collect_artifacts(
             task,
             state,
@@ -233,25 +376,40 @@ class CriticAgent(BaseAgent):
             ) in artifacts.items()
         }
 
+        memory_context = (
+            self._retrieve_memory_context(
+                state,
+                artifacts,
+            )
+        )
+
         system_prompt = (
             "You are the final Critic Agent inside "
             "NEXUS, an autonomous AI software "
             "engineering system. Act as a strict "
             "senior engineering quality gate. "
-            "Evaluate only supplied evidence. "
+            "Evaluate only supplied current evidence. "
+            "Relevant past NEXUS experience may be "
+            "used to identify repeated mistakes or "
+            "quality regressions, but current evidence "
+            "always takes priority. "
             "Return valid JSON only."
         )
 
         prompt = f"""
-USER REQUEST:
+CURRENT USER REQUEST:
 
 {state.user_request}
 
-EXECUTION EVIDENCE:
+CURRENT EXECUTION EVIDENCE:
 
 {json.dumps(evidence, indent=2)}
 
-Evaluate the completed software workflow.
+RELEVANT PAST NEXUS EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
+
+Evaluate the CURRENT completed software workflow.
 
 Return exactly one JSON object with:
 
@@ -291,20 +449,63 @@ critical
 Rules:
 
 - quality_score must be between 0 and 100
-- evaluate requirements against implementation
-- evaluate architecture consistency
-- evaluate implementation quality
-- use the test result as evidence
-- use the security report as evidence
+
+- current requirements are the source of truth
+
+- evaluate current requirements against
+  current implementation
+
+- evaluate current architecture consistency
+
+- evaluate current implementation quality
+
+- use the CURRENT test result as evidence
+
+- use the CURRENT security report as evidence
+
+- past memories are advisory only
+
+- use previous critic feedback to detect
+  repeated quality problems
+
+- use previous security feedback to detect
+  repeated security weaknesses
+
+- use previous failures and repairs only when
+  relevant to current evidence
+
+- never downgrade current evidence because
+  an old run succeeded
+
+- never mark current tests as successful based
+  on previous runs
+
+- never mark current security as safe based
+  on previous runs
+
 - do not invent failures
+
 - do not invent successful tests
+
 - do not invent security findings
-- accept only when all five quality gates pass
-- accept must have an empty required_improvements list
+
+- accept only when all five current
+  quality gates pass
+
+- accept must have an empty
+  required_improvements list
+
 - revise means the implementation is recoverable
-- reject means major redesign or fundamental correction is needed
-- revise or reject must contain required improvements
-- strengths must contain at least one concrete strength
+
+- reject means major redesign or fundamental
+  correction is needed
+
+- revise or reject must contain
+  required improvements
+
+- strengths must contain at least one
+  concrete strength
+
 - return JSON only
 """
 
@@ -313,7 +514,6 @@ Rules:
         for attempt in range(
             self.max_validation_retries + 1
         ):
-
             raw_output = self.llm.generate(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
@@ -339,6 +539,10 @@ Rules:
                             report.quality_score,
                         "issue_count":
                             len(report.issues),
+                        "memory_context_count":
+                            len(memory_context),
+                        "memory_augmented":
+                            bool(memory_context),
                     },
                 )
 
@@ -347,11 +551,11 @@ Rules:
                 ValidationError,
                 CriticGenerationError,
             ) as exc:
-
                 last_error = exc
 
                 prompt = f"""
-Your previous quality-gate response failed validation.
+Your previous quality-gate response
+failed validation.
 
 ERROR:
 
@@ -360,6 +564,14 @@ ERROR:
 PREVIOUS RESPONSE:
 
 {raw_output}
+
+CURRENT EXECUTION EVIDENCE:
+
+{json.dumps(evidence, indent=2)}
+
+RELEVANT PAST EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
 
 Repair the response.
 
@@ -381,11 +593,24 @@ final_recommendation
 Rules:
 
 - verdict must be accept, revise, or reject
+
 - quality_score must be 0 through 100
-- accept requires all five gates to be true
-- accept requires required_improvements to be empty
-- revise or reject requires at least one required improvement
+
+- accept requires all five current gates
+  to be true
+
+- accept requires required_improvements
+  to be empty
+
+- revise or reject requires at least one
+  required improvement
+
+- current evidence takes priority over memory
+
+- past experience is advisory only
+
 - do not invent evidence
+
 - return JSON only
 """
 
@@ -394,3 +619,4 @@ Rules:
             "validated after retries: "
             f"{last_error}"
         )
+
