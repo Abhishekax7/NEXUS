@@ -426,3 +426,60 @@ def test_build_engine_without_optional_subsystems(
         architect.memory_retriever
         is None
     )
+def test_registry_injects_memory_into_critic(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    retriever = build_memory_retriever(
+        manager
+    )
+
+    registry = build_default_registry(
+        memory_retriever=retriever
+    )
+
+    critic = registry.get_agent(
+        AgentRole.CRITIC
+    )
+
+    assert (
+        critic.memory_retriever
+        is retriever
+    )
+
+
+def test_engine_memory_is_shared_with_critic(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_self_healing=True,
+        enable_memory=True,
+    )
+
+    critic = engine.registry.get_agent(
+        AgentRole.CRITIC
+    )
+
+    assert (
+        critic.memory_retriever
+        is not None
+    )
+
+    assert (
+        critic.memory_retriever.store
+        is engine.memory_manager.store
+    )

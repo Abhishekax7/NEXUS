@@ -74,7 +74,9 @@ def build_default_registry(
 
     registry.register(
         AgentRole.CRITIC,
-        CriticAgent,
+        lambda: CriticAgent(
+            memory_retriever=memory_retriever
+        ),
     )
 
     return registry
@@ -166,9 +168,9 @@ def build_nexus_engine(
 
     - MemoryManager persists new experience.
     - MemoryRetriever retrieves prior experience.
-    - Architect receives past architectural,
-      security, and critic lessons.
+    - Architect receives past design/security/critic lessons.
     - Debugger receives prior failures and repairs.
+    - Critic receives past quality/security/failure context.
     """
 
     memory_manager = None
