@@ -12,9 +12,11 @@ from app.core.models import AgentRole
 from app.core.repair_loop import RepairLoop
 from app.core.runtime import (
     build_default_registry,
+    build_memory_manager,
     build_nexus_engine,
     build_repair_loop,
 )
+from app.memory.manager import MemoryManager
 
 
 def test_default_registry_contains_core_agents():
@@ -143,12 +145,40 @@ def test_build_repair_loop_returns_repair_loop(
     assert loop.max_repairs == 3
 
 
-def test_build_engine_with_self_healing(
+def test_build_memory_manager(
+    tmp_path,
+):
+    db_path = (
+        tmp_path
+        / "memory.db"
+    )
+
+    manager = build_memory_manager(
+        memory_db_path=str(db_path)
+    )
+
+    assert isinstance(
+        manager,
+        MemoryManager,
+    )
+
+    assert manager.store.count() == 0
+
+
+def test_build_engine_with_self_healing_and_memory(
     tmp_path,
 ):
     engine = build_nexus_engine(
-        workspace_root=str(tmp_path),
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
         enable_self_healing=True,
+        enable_memory=True,
     )
 
     assert isinstance(
@@ -157,19 +187,66 @@ def test_build_engine_with_self_healing(
     )
 
     assert engine.repair_loop is not None
+    assert engine.memory_manager is not None
 
 
 def test_build_engine_without_self_healing(
     tmp_path,
 ):
     engine = build_nexus_engine(
-        workspace_root=str(tmp_path),
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
         enable_self_healing=False,
-    )
-
-    assert isinstance(
-        engine,
-        NexusEngine,
+        enable_memory=True,
     )
 
     assert engine.repair_loop is None
+
+    assert engine.memory_manager is not None
+
+
+def test_build_engine_without_memory(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_self_healing=True,
+        enable_memory=False,
+    )
+
+    assert engine.repair_loop is not None
+
+    assert engine.memory_manager is None
+
+
+def test_build_engine_without_optional_subsystems(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_self_healing=False,
+        enable_memory=False,
+    )
+
+    assert engine.repair_loop is None
+    assert engine.memory_manager is None
