@@ -16,16 +16,27 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+from app.memory.retriever import MemoryRetriever
 
 
 class ComponentDesign(BaseModel):
-    name: str = Field(min_length=1)
-    responsibility: str = Field(min_length=1)
-    technology: str = Field(min_length=1)
+    name: str = Field(
+        min_length=1
+    )
+
+    responsibility: str = Field(
+        min_length=1
+    )
+
+    technology: str = Field(
+        min_length=1
+    )
 
 
 class ArchitectureDesign(BaseModel):
-    architecture_style: str = Field(min_length=1)
+    architecture_style: str = Field(
+        min_length=1
+    )
 
     components: list[ComponentDesign] = Field(
         min_length=1
@@ -66,12 +77,27 @@ class ArchitectAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Optional[LLMClient] = None,
+        memory_retriever: Optional[
+            MemoryRetriever
+        ] = None,
         max_validation_retries: int = 2,
+        memory_limit: int = 4,
     ):
-        self.llm = llm_client or LLMClient()
+        self.llm = (
+            llm_client
+            or LLMClient()
+        )
+
+        self.memory_retriever = (
+            memory_retriever
+        )
 
         self.max_validation_retries = (
             max_validation_retries
+        )
+
+        self.memory_limit = (
+            memory_limit
         )
 
     def _get_artifact_content(
@@ -80,14 +106,6 @@ class ArchitectAgent(BaseAgent):
         state: NexusState,
         artifact_type: ArtifactType,
     ) -> dict:
-        """
-        Prefer explicit task inputs.
-
-        Fall back to state lookup so the agent can
-        still be executed independently in tests
-        or manual smoke tests.
-        """
-
         for artifact_id in task.input_artifact_ids:
             artifact = state.artifacts.get(
                 artifact_id
@@ -95,12 +113,16 @@ class ArchitectAgent(BaseAgent):
 
             if (
                 artifact
-                and artifact.type == artifact_type
+                and artifact.type
+                == artifact_type
             ):
                 return artifact.content
 
         for artifact in state.artifacts.values():
-            if artifact.type == artifact_type:
+            if (
+                artifact.type
+                == artifact_type
+            ):
                 return artifact.content
 
         raise ArchitectureGenerationError(
@@ -119,41 +141,187 @@ class ArchitectAgent(BaseAgent):
             parsed
         )
 
+    def _build_memory_query(
+        self,
+        state: NexusState,
+        requirements: dict,
+        research: dict,
+    ) -> str:
+        parts = [
+            state.user_request,
+            str(
+                requirements.get(
+                    "objective",
+                    "",
+                )
+            ),
+        ]
+
+        technologies = (
+            research.get(
+                "recommended_technologies",
+                [],
+            )
+        )
+
+        if isinstance(
+            technologies,
+            list,
+        ):
+            parts.extend(
+                str(item)
+                for item in technologies
+            )
+
+        constraints = (
+            requirements.get(
+                "constraints",
+                [],
+            )
+        )
+
+        if isinstance(
+            constraints,
+            list,
+        ):
+            parts.extend(
+                str(item)
+                for item in constraints
+            )
+
+        return " ".join(
+            part
+            for part in parts
+            if part
+        )
+
+    def _retrieve_memory_context(
+        self,
+        state: NexusState,
+        requirements: dict,
+        research: dict,
+    ) -> list[dict]:
+        if self.memory_retriever is None:
+            return []
+
+        query = self._build_memory_query(
+            state,
+            requirements,
+            research,
+        )
+
+        if not query.strip():
+            return []
+
+        results = (
+            self.memory_retriever.retrieve(
+                query=query,
+                limit=self.memory_limit,
+                memory_types=[
+                    "artifact",
+                    "critic",
+                    "security",
+                ],
+                exclude_run_id=state.run_id,
+            )
+        )
+
+        memories = []
+
+        for result in results:
+            memories.append(
+                {
+                    "score":
+                        result.score,
+                    "memory_type":
+                        result.memory[
+                            "memory_type"
+                        ],
+                    "run_id":
+                        result.memory[
+                            "run_id"
+                        ],
+                    "key":
+                        result.memory[
+                            "key"
+                        ],
+                    "value":
+                        result.memory[
+                            "value"
+                        ],
+                    "metadata":
+                        result.memory[
+                            "metadata"
+                        ],
+                }
+            )
+
+        return memories
+
     def execute(
         self,
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-        requirements = self._get_artifact_content(
-            task,
-            state,
-            ArtifactType.REQUIREMENTS,
+        requirements = (
+            self._get_artifact_content(
+                task,
+                state,
+                ArtifactType.REQUIREMENTS,
+            )
         )
 
-        research = self._get_artifact_content(
-            task,
-            state,
-            ArtifactType.RESEARCH,
+        research = (
+            self._get_artifact_content(
+                task,
+                state,
+                ArtifactType.RESEARCH,
+            )
+        )
+
+        memory_context = (
+            self._retrieve_memory_context(
+                state,
+                requirements,
+                research,
+            )
         )
 
         system_prompt = (
             "You are the Architect Agent inside NEXUS, "
-            "an autonomous AI software engineering system. "
-            "Design technically strong architectures using "
-            "both validated requirements and evidence-backed "
-            "technical research. Return valid JSON only."
+            "an autonomous AI software engineering "
+            "system. Design technically strong, modular "
+            "architectures using validated requirements, "
+            "evidence-backed technical research, and "
+            "relevant experience from previous NEXUS "
+            "runs when available. Past experience is "
+            "advisory only. Current requirements and "
+            "research are the source of truth. "
+            "Return machine-valid JSON only."
         )
 
         prompt = f"""
+CURRENT USER REQUEST:
+
+{state.user_request}
+
 VALIDATED REQUIREMENTS:
 
 {json.dumps(requirements, indent=2)}
 
-EVIDENCE-BACKED RESEARCH:
+CURRENT EVIDENCE-BACKED RESEARCH:
 
 {json.dumps(research, indent=2)}
 
-Design the software architecture using BOTH inputs.
+RELEVANT PAST NEXUS EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
+
+Design the software architecture using the CURRENT
+requirements and research.
+
+You may use useful lessons from past NEXUS experience,
+but do not blindly copy previous architectures.
 
 Return exactly one JSON object containing:
 
@@ -187,22 +355,35 @@ Rules:
 
 - design_decisions must explain important choices
 
-- research_influences must explain which architectural
-  choices were influenced by the supplied research
+- research_influences must explain which choices
+  were influenced by current technical research
 
-- use the supplied research as evidence
+- current requirements take priority over memory
+
+- current research takes priority over memory
+
+- previous critic feedback may be used to avoid
+  repeating earlier quality problems
+
+- previous security feedback may be used to avoid
+  repeating earlier security weaknesses
+
+- previous architecture artifacts may be used only
+  when relevant to the current system
+
+- never treat past memory as guaranteed truth
 
 - do not invent external research sources
 
-- respect constraints from the requirements
+- respect all current constraints
 
-- prefer free/open-source technologies where required
+- prefer free/open-source technologies when required
 
 - every field is mandatory and non-empty
 
 - do not return markdown
 
-- do not return text outside the JSON object
+- return JSON only
 """
 
         last_error = None
@@ -217,8 +398,10 @@ Rules:
             )
 
             try:
-                design = self._validate_output(
-                    raw_output
+                design = (
+                    self._validate_output(
+                        raw_output
+                    )
                 )
 
                 return Artifact(
@@ -233,6 +416,10 @@ Rules:
                             True,
                         "grounded_in_research":
                             True,
+                        "memory_context_count":
+                            len(memory_context),
+                        "memory_augmented":
+                            bool(memory_context),
                     },
                 )
 
@@ -243,7 +430,8 @@ Rules:
                 last_error = exc
 
                 prompt = f"""
-The previous architecture response failed validation.
+The previous architecture response
+failed validation.
 
 ERROR:
 
@@ -253,9 +441,21 @@ PREVIOUS RESPONSE:
 
 {raw_output}
 
-Repair the architecture.
+CURRENT REQUIREMENTS:
 
-Return ONLY one complete JSON object containing:
+{json.dumps(requirements, indent=2)}
+
+CURRENT RESEARCH:
+
+{json.dumps(research, indent=2)}
+
+RELEVANT PAST EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
+
+Repair the architecture response.
+
+Return exactly one JSON object containing:
 
 architecture_style
 components
@@ -266,13 +466,18 @@ security_considerations
 design_decisions
 research_influences
 
-Every field is mandatory and non-empty.
+Rules:
 
-The architecture must remain grounded in BOTH
-the validated requirements and supplied research.
+- every field is mandatory
+- every field must be non-empty
+- current requirements are the source of truth
+- current research takes priority over memory
+- past experience is advisory only
+- return JSON only
 """
 
         raise ArchitectureGenerationError(
-            "Architecture could not be validated "
-            f"after retries: {last_error}"
+            "Architecture could not be "
+            "validated after retries: "
+            f"{last_error}"
         )
