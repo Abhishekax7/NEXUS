@@ -13,10 +13,12 @@ from app.core.repair_loop import RepairLoop
 from app.core.runtime import (
     build_default_registry,
     build_memory_manager,
+    build_memory_retriever,
     build_nexus_engine,
     build_repair_loop,
 )
 from app.memory.manager import MemoryManager
+from app.memory.retriever import MemoryRetriever
 
 
 def test_default_registry_contains_core_agents():
@@ -128,11 +130,56 @@ def test_registry_resolves_real_critic_agent():
     )
 
 
-def test_build_repair_loop_returns_repair_loop(
+def test_build_memory_manager(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    assert isinstance(
+        manager,
+        MemoryManager,
+    )
+
+    assert manager.store.count() == 0
+
+
+def test_build_memory_retriever(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    retriever = build_memory_retriever(
+        manager
+    )
+
+    assert isinstance(
+        retriever,
+        MemoryRetriever,
+    )
+
+    assert (
+        retriever.store
+        is manager.store
+    )
+
+
+def test_build_repair_loop_without_memory(
     tmp_path,
 ):
     loop = build_repair_loop(
-        workspace_root=str(tmp_path),
+        workspace_root=str(
+            tmp_path
+        ),
         command_timeout=5,
         max_repairs=3,
     )
@@ -144,28 +191,41 @@ def test_build_repair_loop_returns_repair_loop(
 
     assert loop.max_repairs == 3
 
+    assert (
+        loop.debugger.memory_retriever
+        is None
+    )
 
-def test_build_memory_manager(
+
+def test_build_repair_loop_with_memory(
     tmp_path,
 ):
-    db_path = (
-        tmp_path
-        / "memory.db"
-    )
-
     manager = build_memory_manager(
-        memory_db_path=str(db_path)
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
     )
 
-    assert isinstance(
-        manager,
-        MemoryManager,
+    retriever = build_memory_retriever(
+        manager
     )
 
-    assert manager.store.count() == 0
+    loop = build_repair_loop(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_retriever=retriever,
+    )
+
+    assert (
+        loop.debugger.memory_retriever
+        is retriever
+    )
 
 
-def test_build_engine_with_self_healing_and_memory(
+def test_engine_with_memory_gives_debugger_retriever(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -181,13 +241,48 @@ def test_build_engine_with_self_healing_and_memory(
         enable_memory=True,
     )
 
-    assert isinstance(
-        engine,
-        NexusEngine,
+    assert engine.memory_manager is not None
+    assert engine.repair_loop is not None
+
+    retriever = (
+        engine.repair_loop
+        .debugger
+        .memory_retriever
     )
 
+    assert retriever is not None
+
+    assert (
+        retriever.store
+        is engine.memory_manager.store
+    )
+
+
+def test_engine_without_memory_has_plain_debugger(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_self_healing=True,
+        enable_memory=False,
+    )
+
+    assert engine.memory_manager is None
     assert engine.repair_loop is not None
-    assert engine.memory_manager is not None
+
+    assert (
+        engine.repair_loop
+        .debugger
+        .memory_retriever
+        is None
+    )
 
 
 def test_build_engine_without_self_healing(
@@ -209,27 +304,6 @@ def test_build_engine_without_self_healing(
     assert engine.repair_loop is None
 
     assert engine.memory_manager is not None
-
-
-def test_build_engine_without_memory(
-    tmp_path,
-):
-    engine = build_nexus_engine(
-        workspace_root=str(
-            tmp_path
-            / "workspace"
-        ),
-        memory_db_path=str(
-            tmp_path
-            / "memory.db"
-        ),
-        enable_self_healing=True,
-        enable_memory=False,
-    )
-
-    assert engine.repair_loop is not None
-
-    assert engine.memory_manager is None
 
 
 def test_build_engine_without_optional_subsystems(
