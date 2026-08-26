@@ -2,14 +2,12 @@ from pathlib import Path
 
 from app.agents.architect import ArchitectAgent
 from app.agents.coder import CoderAgent
+from app.agents.critic import CriticAgent
 from app.agents.debugger import DebuggerAgent
-from app.agents.placeholders import (
-    CriticAgent,
-    SecurityAgent,
-)
 from app.agents.registry import AgentRegistry
 from app.agents.requirements import RequirementsAgent
 from app.agents.research import ResearchAgent
+from app.agents.security import SecurityAgent
 from app.agents.tester import TesterAgent
 from app.core.engine import NexusEngine
 from app.core.models import AgentRole
@@ -27,8 +25,6 @@ DEFAULT_MAX_REPAIRS = 2
 def build_default_registry() -> AgentRegistry:
     """
     Build the production NEXUS agent registry.
-
-    These are the agents used by the main execution engine.
     """
 
     registry = AgentRegistry()
@@ -132,4 +128,3 @@ def build_nexus_engine(
         registry=registry,
         repair_loop=repair_loop,
     )
-

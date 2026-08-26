@@ -1,7 +1,9 @@
 from app.agents.architect import ArchitectAgent
 from app.agents.coder import CoderAgent
+from app.agents.critic import CriticAgent
 from app.agents.requirements import RequirementsAgent
 from app.agents.research import ResearchAgent
+from app.agents.security import SecurityAgent
 from app.agents.tester import (
     TesterAgent as NexusTesterAgent,
 )
@@ -95,6 +97,32 @@ def test_registry_resolves_real_tester_agent():
     assert isinstance(
         agent,
         NexusTesterAgent,
+    )
+
+
+def test_registry_resolves_real_security_agent():
+    registry = build_default_registry()
+
+    agent = registry.get_agent(
+        AgentRole.SECURITY
+    )
+
+    assert isinstance(
+        agent,
+        SecurityAgent,
+    )
+
+
+def test_registry_resolves_real_critic_agent():
+    registry = build_default_registry()
+
+    agent = registry.get_agent(
+        AgentRole.CRITIC
+    )
+
+    assert isinstance(
+        agent,
+        CriticAgent,
     )
 
 
