@@ -26,9 +26,16 @@ DEFAULT_COMMAND_TIMEOUT = 20
 DEFAULT_MAX_REPAIRS = 2
 
 
-def build_default_registry() -> AgentRegistry:
+def build_default_registry(
+    memory_retriever: Optional[
+        MemoryRetriever
+    ] = None,
+) -> AgentRegistry:
     """
     Build the production NEXUS agent registry.
+
+    Memory-aware agents receive the shared
+    MemoryRetriever through dependency injection.
     """
 
     registry = AgentRegistry()
@@ -45,7 +52,9 @@ def build_default_registry() -> AgentRegistry:
 
     registry.register(
         AgentRole.ARCHITECT,
-        ArchitectAgent,
+        lambda: ArchitectAgent(
+            memory_retriever=memory_retriever
+        ),
     )
 
     registry.register(
@@ -91,8 +100,8 @@ def build_memory_retriever(
     memory_manager: MemoryManager,
 ) -> MemoryRetriever:
     """
-    Build a retriever over the same persistent store
-    used by the MemoryManager.
+    Build a retriever over the same persistent
+    SQLite store used by the MemoryManager.
     """
 
     return MemoryRetriever(
@@ -109,7 +118,8 @@ def build_repair_loop(
     ] = None,
 ) -> RepairLoop:
     """
-    Build the autonomous test-debug-patch-retest subsystem.
+    Build the autonomous test-debug-patch-retest
+    subsystem.
     """
 
     workspace_writer = WorkspaceWriter(
@@ -152,12 +162,14 @@ def build_nexus_engine(
     """
     Assemble the production NEXUS execution engine.
 
-    When memory is enabled, the MemoryManager and
-    Debugger's MemoryRetriever share the same SQLite
-    store so past repairs can influence future runs.
-    """
+    With memory enabled:
 
-    registry = build_default_registry()
+    - MemoryManager persists new experience.
+    - MemoryRetriever retrieves prior experience.
+    - Architect receives past architectural,
+      security, and critic lessons.
+    - Debugger receives prior failures and repairs.
+    """
 
     memory_manager = None
     memory_retriever = None
@@ -172,6 +184,10 @@ def build_nexus_engine(
                 memory_manager
             )
         )
+
+    registry = build_default_registry(
+        memory_retriever=memory_retriever
+    )
 
     repair_loop = None
 

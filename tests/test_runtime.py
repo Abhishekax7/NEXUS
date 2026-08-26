@@ -130,6 +130,47 @@ def test_registry_resolves_real_critic_agent():
     )
 
 
+def test_default_architect_has_no_memory():
+    registry = build_default_registry()
+
+    architect = registry.get_agent(
+        AgentRole.ARCHITECT
+    )
+
+    assert (
+        architect.memory_retriever
+        is None
+    )
+
+
+def test_registry_injects_memory_into_architect(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    retriever = build_memory_retriever(
+        manager
+    )
+
+    registry = build_default_registry(
+        memory_retriever=retriever
+    )
+
+    architect = registry.get_agent(
+        AgentRole.ARCHITECT
+    )
+
+    assert (
+        architect.memory_retriever
+        is retriever
+    )
+
+
 def test_build_memory_manager(
     tmp_path,
 ):
@@ -225,7 +266,7 @@ def test_build_repair_loop_with_memory(
     )
 
 
-def test_engine_with_memory_gives_debugger_retriever(
+def test_engine_memory_is_shared_with_architect_and_debugger(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -241,24 +282,47 @@ def test_engine_with_memory_gives_debugger_retriever(
         enable_memory=True,
     )
 
-    assert engine.memory_manager is not None
-    assert engine.repair_loop is not None
+    assert (
+        engine.memory_manager
+        is not None
+    )
 
-    retriever = (
+    assert (
+        engine.repair_loop
+        is not None
+    )
+
+    architect = (
+        engine.registry.get_agent(
+            AgentRole.ARCHITECT
+        )
+    )
+
+    debugger_retriever = (
         engine.repair_loop
         .debugger
         .memory_retriever
     )
 
-    assert retriever is not None
+    architect_retriever = (
+        architect.memory_retriever
+    )
+
+    assert architect_retriever is not None
+    assert debugger_retriever is not None
 
     assert (
-        retriever.store
+        architect_retriever.store
+        is engine.memory_manager.store
+    )
+
+    assert (
+        debugger_retriever.store
         is engine.memory_manager.store
     )
 
 
-def test_engine_without_memory_has_plain_debugger(
+def test_engine_without_memory_has_plain_architect_and_debugger(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -274,13 +338,26 @@ def test_engine_without_memory_has_plain_debugger(
         enable_memory=False,
     )
 
-    assert engine.memory_manager is None
-    assert engine.repair_loop is not None
+    architect = (
+        engine.registry.get_agent(
+            AgentRole.ARCHITECT
+        )
+    )
+
+    assert (
+        architect.memory_retriever
+        is None
+    )
 
     assert (
         engine.repair_loop
         .debugger
         .memory_retriever
+        is None
+    )
+
+    assert (
+        engine.memory_manager
         is None
     )
 
@@ -303,7 +380,21 @@ def test_build_engine_without_self_healing(
 
     assert engine.repair_loop is None
 
-    assert engine.memory_manager is not None
+    assert (
+        engine.memory_manager
+        is not None
+    )
+
+    architect = (
+        engine.registry.get_agent(
+            AgentRole.ARCHITECT
+        )
+    )
+
+    assert (
+        architect.memory_retriever
+        is not None
+    )
 
 
 def test_build_engine_without_optional_subsystems(
@@ -324,3 +415,14 @@ def test_build_engine_without_optional_subsystems(
 
     assert engine.repair_loop is None
     assert engine.memory_manager is None
+
+    architect = (
+        engine.registry.get_agent(
+            AgentRole.ARCHITECT
+        )
+    )
+
+    assert (
+        architect.memory_retriever
+        is None
+    )
