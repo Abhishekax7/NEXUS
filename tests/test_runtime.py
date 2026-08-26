@@ -1,6 +1,7 @@
 from app.agents.architect import ArchitectAgent
 from app.agents.coder import CoderAgent
 from app.agents.critic import CriticAgent
+from app.agents.replanner import ReplannerAgent
 from app.agents.requirements import RequirementsAgent
 from app.agents.research import ResearchAgent
 from app.agents.security import SecurityAgent
@@ -9,13 +10,16 @@ from app.agents.tester import (
 )
 from app.core.engine import NexusEngine
 from app.core.models import AgentRole
+from app.core.plan_mutator import PlanMutator
 from app.core.repair_loop import RepairLoop
 from app.core.runtime import (
     build_default_registry,
     build_memory_manager,
     build_memory_retriever,
     build_nexus_engine,
+    build_plan_mutator,
     build_repair_loop,
+    build_replanner,
 )
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
@@ -307,6 +311,101 @@ def test_build_repair_loop_with_memory(
     )
 
 
+def test_build_replanner():
+    replanner = build_replanner()
+
+    assert isinstance(
+        replanner,
+        ReplannerAgent,
+    )
+
+
+def test_build_plan_mutator():
+    mutator = build_plan_mutator()
+
+    assert isinstance(
+        mutator,
+        PlanMutator,
+    )
+
+
+def test_engine_enables_replanning_by_default(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+    )
+
+    assert isinstance(
+        engine,
+        NexusEngine,
+    )
+
+    assert (
+        engine.replanner
+        is not None
+    )
+
+    assert isinstance(
+        engine.replanner,
+        ReplannerAgent,
+    )
+
+    assert isinstance(
+        engine.plan_mutator,
+        PlanMutator,
+    )
+
+
+def test_engine_can_disable_replanning(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+    )
+
+    assert (
+        engine.replanner
+        is None
+    )
+
+
+def test_engine_uses_configured_replan_budget(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        max_replans=7,
+    )
+
+    assert (
+        engine.max_replans
+        == 7
+    )
+
+
 def test_engine_memory_is_shared_with_architect_debugger_and_critic(
     tmp_path,
 ):
@@ -321,6 +420,7 @@ def test_engine_memory_is_shared_with_architect_debugger_and_critic(
         ),
         enable_self_healing=True,
         enable_memory=True,
+        enable_replanning=False,
     )
 
     assert (
@@ -393,6 +493,7 @@ def test_engine_without_memory_has_plain_memory_aware_agents(
         ),
         enable_self_healing=True,
         enable_memory=False,
+        enable_replanning=False,
     )
 
     architect = (
@@ -444,6 +545,7 @@ def test_build_engine_without_self_healing(
         ),
         enable_self_healing=False,
         enable_memory=True,
+        enable_replanning=False,
     )
 
     assert engine.repair_loop is None
@@ -490,10 +592,12 @@ def test_build_engine_without_optional_subsystems(
         ),
         enable_self_healing=False,
         enable_memory=False,
+        enable_replanning=False,
     )
 
     assert engine.repair_loop is None
     assert engine.memory_manager is None
+    assert engine.replanner is None
 
     architect = (
         engine.registry.get_agent(

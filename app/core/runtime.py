@@ -5,12 +5,14 @@ from app.agents.coder import CoderAgent
 from app.agents.critic import CriticAgent
 from app.agents.debugger import DebuggerAgent
 from app.agents.registry import AgentRegistry
+from app.agents.replanner import ReplannerAgent
 from app.agents.requirements import RequirementsAgent
 from app.agents.research import ResearchAgent
 from app.agents.security import SecurityAgent
 from app.agents.tester import TesterAgent
 from app.core.engine import NexusEngine
 from app.core.models import AgentRole
+from app.core.plan_mutator import PlanMutator
 from app.core.repair_loop import RepairLoop
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
@@ -24,6 +26,7 @@ DEFAULT_WORKSPACE_ROOT = "workspace"
 DEFAULT_MEMORY_DB_PATH = "data/nexus_memory.db"
 DEFAULT_COMMAND_TIMEOUT = 20
 DEFAULT_MAX_REPAIRS = 2
+DEFAULT_MAX_REPLANS = 3
 
 
 def build_default_registry(
@@ -31,13 +34,6 @@ def build_default_registry(
         MemoryRetriever
     ] = None,
 ) -> AgentRegistry:
-    """
-    Build the production NEXUS agent registry.
-
-    Memory-aware agents receive the shared
-    MemoryRetriever through dependency injection.
-    """
-
     registry = AgentRegistry()
 
     registry.register(
@@ -85,10 +81,6 @@ def build_default_registry(
 def build_memory_manager(
     memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
 ) -> MemoryManager:
-    """
-    Build the persistent NEXUS memory subsystem.
-    """
-
     store = MemoryStore(
         db_path=memory_db_path
     )
@@ -101,11 +93,6 @@ def build_memory_manager(
 def build_memory_retriever(
     memory_manager: MemoryManager,
 ) -> MemoryRetriever:
-    """
-    Build a retriever over the same persistent
-    SQLite store used by the MemoryManager.
-    """
-
     return MemoryRetriever(
         store=memory_manager.store
     )
@@ -119,11 +106,6 @@ def build_repair_loop(
         MemoryRetriever
     ] = None,
 ) -> RepairLoop:
-    """
-    Build the autonomous test-debug-patch-retest
-    subsystem.
-    """
-
     workspace_writer = WorkspaceWriter(
         root=workspace_root
     )
@@ -153,26 +135,24 @@ def build_repair_loop(
     )
 
 
+def build_replanner() -> ReplannerAgent:
+    return ReplannerAgent()
+
+
+def build_plan_mutator() -> PlanMutator:
+    return PlanMutator()
+
+
 def build_nexus_engine(
     workspace_root: str = DEFAULT_WORKSPACE_ROOT,
     memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
     command_timeout: int = DEFAULT_COMMAND_TIMEOUT,
     max_repairs: int = DEFAULT_MAX_REPAIRS,
+    max_replans: int = DEFAULT_MAX_REPLANS,
     enable_self_healing: bool = True,
     enable_memory: bool = True,
+    enable_replanning: bool = True,
 ) -> NexusEngine:
-    """
-    Assemble the production NEXUS execution engine.
-
-    With memory enabled:
-
-    - MemoryManager persists new experience.
-    - MemoryRetriever retrieves prior experience.
-    - Architect receives past design/security/critic lessons.
-    - Debugger receives prior failures and repairs.
-    - Critic receives past quality/security/failure context.
-    """
-
     memory_manager = None
     memory_retriever = None
 
@@ -201,8 +181,19 @@ def build_nexus_engine(
             memory_retriever=memory_retriever,
         )
 
+    replanner = None
+    plan_mutator = None
+
+    if enable_replanning:
+        replanner = build_replanner()
+        plan_mutator = build_plan_mutator()
+
     return NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
         memory_manager=memory_manager,
+        replanner=replanner,
+        plan_mutator=plan_mutator,
+        max_replans=max_replans,
     )
+

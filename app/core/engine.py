@@ -1,7 +1,12 @@
 from typing import Optional
 
 from app.agents.registry import AgentRegistry
+from app.agents.replanner import ReplannerAgent
 from app.core.models import AgentRole
+from app.core.plan_mutator import (
+    PlanMutator,
+    PlanMutationResult,
+)
 from app.core.repair_loop import RepairLoop
 from app.core.runner import AgentRunner
 from app.core.scheduler import (
@@ -20,13 +25,25 @@ class WorkflowRepairFailed(Exception):
     """Raised when autonomous repair cannot recover failing code."""
 
 
+class ReplanningLimitExceeded(Exception):
+    """Raised when the workflow exceeds its replan budget."""
+
+
 class NexusEngine:
     def __init__(
         self,
         registry: AgentRegistry,
         repair_loop: Optional[RepairLoop] = None,
         memory_manager: Optional[MemoryManager] = None,
+        replanner: Optional[ReplannerAgent] = None,
+        plan_mutator: Optional[PlanMutator] = None,
+        max_replans: int = 3,
     ):
+        if max_replans < 0:
+            raise ValueError(
+                "max_replans cannot be negative."
+            )
+
         self.registry = registry
 
         self.runner = AgentRunner(
@@ -35,6 +52,15 @@ class NexusEngine:
 
         self.repair_loop = repair_loop
         self.memory_manager = memory_manager
+
+        self.replanner = replanner
+
+        self.plan_mutator = (
+            plan_mutator
+            or PlanMutator()
+        )
+
+        self.max_replans = max_replans
 
     def _remember_task(
         self,
@@ -151,6 +177,112 @@ class NexusEngine:
                 message
             )
 
+    def _get_replan_count(
+        self,
+        state: NexusState,
+    ) -> int:
+        return int(
+            state.metadata.get(
+                "replan_count",
+                0,
+            )
+        )
+
+    def _increment_replan_count(
+        self,
+        state: NexusState,
+    ) -> int:
+        count = (
+            self._get_replan_count(
+                state
+            )
+            + 1
+        )
+
+        state.metadata[
+            "replan_count"
+        ] = count
+
+        return count
+
+    def _record_replan_result(
+        self,
+        result: PlanMutationResult,
+        state: NexusState,
+    ) -> None:
+        history = state.metadata.setdefault(
+            "replan_history",
+            [],
+        )
+
+        history.append(
+            {
+                "action": result.action.value,
+                "added_task_id":
+                    result.added_task_id,
+                "removed_task_id":
+                    result.removed_task_id,
+                "replaced_task_id":
+                    result.replaced_task_id,
+            }
+        )
+
+    def _maybe_replan(
+        self,
+        state: NexusState,
+    ) -> None:
+        if self.replanner is None:
+            return
+
+        decision = self.replanner.decide(
+            state
+        )
+
+        if not decision.should_replan:
+            return
+
+        current_count = (
+            self._get_replan_count(
+                state
+            )
+        )
+
+        if (
+            current_count
+            >= self.max_replans
+        ):
+            state.failed = True
+
+            message = (
+                "NEXUS exceeded the maximum "
+                f"replanning budget of "
+                f"{self.max_replans}."
+            )
+
+            state.errors.append(
+                message
+            )
+
+            raise ReplanningLimitExceeded(
+                message
+            )
+
+        result = (
+            self.plan_mutator.apply(
+                decision,
+                state,
+            )
+        )
+
+        self._increment_replan_count(
+            state
+        )
+
+        self._record_replan_result(
+            result,
+            state,
+        )
+
     def run(
         self,
         state: NexusState,
@@ -211,6 +343,10 @@ class NexusEngine:
                     raise
 
             state.iteration += 1
+
+            self._maybe_replan(
+                state
+            )
 
         state.completed = True
         state.failed = False
