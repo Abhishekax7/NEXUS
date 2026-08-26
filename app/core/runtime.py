@@ -10,13 +10,16 @@ from app.agents.requirements import RequirementsAgent
 from app.agents.research import ResearchAgent
 from app.agents.security import SecurityAgent
 from app.agents.tester import TesterAgent
+
 from app.core.engine import NexusEngine
 from app.core.models import AgentRole
 from app.core.plan_mutator import PlanMutator
 from app.core.repair_loop import RepairLoop
+
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import MemoryStore
+
 from app.tools.executor import CommandExecutor
 from app.tools.executor_runtime import ToolExecutor
 from app.tools.patcher import PatchApplicator
@@ -40,7 +43,17 @@ def build_default_registry(
     memory_retriever: Optional[
         MemoryRetriever
     ] = None,
+    tool_runtime: Optional[
+        ToolRuntime
+    ] = None,
 ) -> AgentRegistry:
+    """
+    Build the production agent registry.
+
+    Optional runtime dependencies are
+    injected into the agents that use them.
+    """
+
     registry = AgentRegistry()
 
     registry.register(
@@ -50,7 +63,9 @@ def build_default_registry(
 
     registry.register(
         AgentRole.RESEARCH,
-        ResearchAgent,
+        lambda: ResearchAgent(
+            tool_runtime=tool_runtime
+        ),
     )
 
     registry.register(
@@ -88,6 +103,10 @@ def build_default_registry(
 def build_memory_manager(
     memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
 ) -> MemoryManager:
+    """
+    Build persistent NEXUS memory.
+    """
+
     store = MemoryStore(
         db_path=memory_db_path
     )
@@ -100,6 +119,11 @@ def build_memory_manager(
 def build_memory_retriever(
     memory_manager: MemoryManager,
 ) -> MemoryRetriever:
+    """
+    Build semantic/deterministic retrieval
+    over the persistent memory store.
+    """
+
     return MemoryRetriever(
         store=memory_manager.store
     )
@@ -113,6 +137,11 @@ def build_repair_loop(
         MemoryRetriever
     ] = None,
 ) -> RepairLoop:
+    """
+    Build the self-healing testing,
+    debugging, and patching subsystem.
+    """
+
     workspace_writer = WorkspaceWriter(
         root=workspace_root
     )
@@ -143,10 +172,19 @@ def build_repair_loop(
 
 
 def build_replanner() -> ReplannerAgent:
+    """
+    Build the dynamic workflow replanner.
+    """
+
     return ReplannerAgent()
 
 
 def build_plan_mutator() -> PlanMutator:
+    """
+    Build the deterministic plan mutation
+    layer used by dynamic replanning.
+    """
+
     return PlanMutator()
 
 
@@ -172,7 +210,7 @@ def build_tool_runtime(
 ) -> ToolRuntime:
     """
     Build the production dynamic tool
-    selection + execution subsystem.
+    selection and execution subsystem.
     """
 
     selector = ToolSelector(
@@ -200,6 +238,15 @@ def build_nexus_engine(
     enable_replanning: bool = True,
     enable_tools: bool = True,
 ) -> NexusEngine:
+    """
+    Construct the complete production
+    NEXUS runtime.
+    """
+
+    # ---------------------------------
+    # Persistent memory
+    # ---------------------------------
+
     memory_manager = None
     memory_retriever = None
 
@@ -214,9 +261,9 @@ def build_nexus_engine(
             )
         )
 
-    registry = build_default_registry(
-        memory_retriever=memory_retriever
-    )
+    # ---------------------------------
+    # Self-healing runtime
+    # ---------------------------------
 
     repair_loop = None
 
@@ -228,12 +275,23 @@ def build_nexus_engine(
             memory_retriever=memory_retriever,
         )
 
+    # ---------------------------------
+    # Dynamic replanning
+    # ---------------------------------
+
     replanner = None
     plan_mutator = None
 
     if enable_replanning:
         replanner = build_replanner()
-        plan_mutator = build_plan_mutator()
+
+        plan_mutator = (
+            build_plan_mutator()
+        )
+
+    # ---------------------------------
+    # Dynamic production tools
+    # ---------------------------------
 
     tool_registry = None
     tool_runtime = None
@@ -248,6 +306,23 @@ def build_nexus_engine(
             tool_registry
         )
 
+    # ---------------------------------
+    # Agent registry
+    #
+    # Build this AFTER tool runtime so
+    # ResearchAgent receives the exact
+    # production ToolRuntime instance.
+    # ---------------------------------
+
+    registry = build_default_registry(
+        memory_retriever=memory_retriever,
+        tool_runtime=tool_runtime,
+    )
+
+    # ---------------------------------
+    # Main orchestration engine
+    # ---------------------------------
+
     engine = NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
@@ -257,6 +332,9 @@ def build_nexus_engine(
         max_replans=max_replans,
     )
 
+    # Tool infrastructure is optional,
+    # so expose it on the engine after
+    # construction.
     engine.tool_registry = (
         tool_registry
     )
