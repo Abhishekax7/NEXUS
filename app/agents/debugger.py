@@ -16,6 +16,7 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+from app.memory.retriever import MemoryRetriever
 
 
 class FilePatch(BaseModel):
@@ -61,12 +62,27 @@ class DebuggerAgent(BaseAgent):
     def __init__(
         self,
         llm_client: Optional[LLMClient] = None,
+        memory_retriever: Optional[
+            MemoryRetriever
+        ] = None,
         max_validation_retries: int = 2,
+        memory_limit: int = 3,
     ):
-        self.llm = llm_client or LLMClient()
+        self.llm = (
+            llm_client
+            or LLMClient()
+        )
+
+        self.memory_retriever = (
+            memory_retriever
+        )
 
         self.max_validation_retries = (
             max_validation_retries
+        )
+
+        self.memory_limit = (
+            memory_limit
         )
 
     def _get_artifact(
@@ -102,13 +118,19 @@ class DebuggerAgent(BaseAgent):
     ) -> None:
         existing_paths = {
             file_data["path"]
-            for file_data in code_artifact.content.get(
+            for file_data
+            in code_artifact.content.get(
                 "files",
                 [],
             )
-            if isinstance(file_data, dict)
+            if isinstance(
+                file_data,
+                dict,
+            )
             and isinstance(
-                file_data.get("path"),
+                file_data.get(
+                    "path"
+                ),
                 str,
             )
         }
@@ -125,17 +147,20 @@ class DebuggerAgent(BaseAgent):
 
             if path.startswith("/"):
                 raise DebugGenerationError(
-                    f"Absolute patch path is forbidden: {path}"
+                    "Absolute patch path is forbidden: "
+                    f"{path}"
                 )
 
             if ".." in path.split("/"):
                 raise DebugGenerationError(
-                    f"Patch path traversal is forbidden: {path}"
+                    "Patch path traversal is forbidden: "
+                    f"{path}"
                 )
 
             if path not in existing_paths:
                 raise DebugGenerationError(
-                    f"Debugger attempted to patch unknown file: {path}"
+                    "Debugger attempted to patch "
+                    f"unknown file: {path}"
                 )
 
             if path in seen_paths:
@@ -143,7 +168,9 @@ class DebuggerAgent(BaseAgent):
                     f"Duplicate patch path: {path}"
                 )
 
-            seen_paths.add(path)
+            seen_paths.add(
+                path
+            )
 
     def _validate_output(
         self,
@@ -156,6 +183,155 @@ class DebuggerAgent(BaseAgent):
         return DebugReport.model_validate(
             parsed
         )
+
+    def _build_memory_query(
+        self,
+        state: NexusState,
+        test_artifact: Artifact,
+    ) -> str:
+        failure_summary = (
+            test_artifact.content.get(
+                "summary",
+                "",
+            )
+        )
+
+        failed_commands = (
+            test_artifact.content.get(
+                "failed_command_names",
+                [],
+            )
+        )
+
+        results = (
+            test_artifact.content.get(
+                "results",
+                [],
+            )
+        )
+
+        failure_text_parts = [
+            state.user_request,
+            str(failure_summary),
+            " ".join(
+                str(command)
+                for command
+                in failed_commands
+            ),
+        ]
+
+        for result in results:
+            if not isinstance(
+                result,
+                dict,
+            ):
+                continue
+
+            failure_text_parts.extend(
+                [
+                    str(
+                        result.get(
+                            "stdout",
+                            "",
+                        )
+                    ),
+                    str(
+                        result.get(
+                            "stderr",
+                            "",
+                        )
+                    ),
+                ]
+            )
+
+        return " ".join(
+            part
+            for part
+            in failure_text_parts
+            if part
+        )
+
+    def _retrieve_memory_context(
+        self,
+        state: NexusState,
+        test_artifact: Artifact,
+    ) -> list[dict]:
+        if self.memory_retriever is None:
+            return []
+
+        query = self._build_memory_query(
+            state,
+            test_artifact,
+        )
+
+        if not query.strip():
+            return []
+
+        past_repairs = (
+            self.memory_retriever
+            .retrieve_repairs(
+                query=query,
+                limit=self.memory_limit,
+                exclude_run_id=state.run_id,
+            )
+        )
+
+        past_failures = (
+            self.memory_retriever
+            .retrieve_failures(
+                query=query,
+                limit=self.memory_limit,
+                exclude_run_id=state.run_id,
+            )
+        )
+
+        memories = []
+
+        for result in (
+            past_repairs
+            + past_failures
+        ):
+            memories.append(
+                {
+                    "score": result.score,
+                    "memory_type": (
+                        result.memory[
+                            "memory_type"
+                        ]
+                    ),
+                    "run_id": (
+                        result.memory[
+                            "run_id"
+                        ]
+                    ),
+                    "key": (
+                        result.memory[
+                            "key"
+                        ]
+                    ),
+                    "value": (
+                        result.memory[
+                            "value"
+                        ]
+                    ),
+                    "metadata": (
+                        result.memory[
+                            "metadata"
+                        ]
+                    ),
+                }
+            )
+
+        memories.sort(
+            key=lambda memory: (
+                memory["score"]
+            ),
+            reverse=True,
+        )
+
+        return memories[
+            :self.memory_limit
+        ]
 
     def execute(
         self,
@@ -174,18 +350,34 @@ class DebuggerAgent(BaseAgent):
             ArtifactType.TEST_RESULT,
         )
 
-        if test_artifact.content.get(
-            "passed"
-        ) is True:
+        if (
+            test_artifact.content.get(
+                "passed"
+            )
+            is True
+        ):
             raise DebugGenerationError(
-                "Debugger should not run when tests already pass."
+                "Debugger should not run "
+                "when tests already pass."
             )
 
+        memory_context = (
+            self._retrieve_memory_context(
+                state,
+                test_artifact,
+            )
+        )
+
         system_prompt = (
-            "You are the Debugger Agent inside NEXUS, "
-            "an autonomous AI software engineering system. "
-            "Analyze failing test output and produce minimal, "
-            "safe file-level repairs. Return valid JSON only."
+            "You are the Debugger Agent inside "
+            "NEXUS, an autonomous AI software "
+            "engineering system. Analyze failing "
+            "test output and produce minimal, safe "
+            "file-level repairs. You may use relevant "
+            "past NEXUS experience as supporting "
+            "evidence, but you must still reason from "
+            "the current code and current failure. "
+            "Return valid JSON only."
         )
 
         prompt = f"""
@@ -193,11 +385,15 @@ GENERATED CODE:
 
 {json.dumps(code_artifact.content, indent=2)}
 
-TEST FAILURE REPORT:
+CURRENT TEST FAILURE REPORT:
 
 {json.dumps(test_artifact.content, indent=2)}
 
-Diagnose the failure and propose a repair.
+RELEVANT PAST NEXUS EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
+
+Diagnose the CURRENT failure and propose a repair.
 
 Return exactly one JSON object containing:
 
@@ -225,12 +421,16 @@ Rules:
 - do not invent new files
 - new_content must contain the complete replacement content
   for the target file
-- prefer the smallest repair that fixes the failure
+- prefer the smallest repair that fixes the current failure
 - preserve working behavior
 - retry_test_commands must contain commands that should
   be executed after the repair
 - confidence must be between 0.0 and 1.0
 - do not include secrets
+- past memories are advisory evidence only
+- never copy a past repair blindly
+- verify that any past solution applies to the current code
+- current code and current test evidence take priority
 - return JSON only
 """
 
@@ -265,6 +465,10 @@ Rules:
                             attempt + 1,
                         "patch_count":
                             len(report.patches),
+                        "memory_context_count":
+                            len(memory_context),
+                        "memory_augmented":
+                            bool(memory_context),
                     },
                 )
 
@@ -285,6 +489,18 @@ ERROR:
 PREVIOUS RESPONSE:
 
 {raw_output}
+
+CURRENT CODE:
+
+{json.dumps(code_artifact.content, indent=2)}
+
+CURRENT TEST FAILURE:
+
+{json.dumps(test_artifact.content, indent=2)}
+
+RELEVANT PAST EXPERIENCE:
+
+{json.dumps(memory_context, indent=2)}
 
 Repair the debug response.
 
@@ -310,10 +526,13 @@ Rules:
 - ../ traversal is forbidden
 - duplicate patch paths are forbidden
 - every field must be non-empty
+- past memories are advisory only
+- current evidence takes priority
 - return JSON only
 """
 
         raise DebugGenerationError(
-            "Debug repair could not be validated "
-            f"after retries: {last_error}"
+            "Debug repair could not be "
+            "validated after retries: "
+            f"{last_error}"
         )

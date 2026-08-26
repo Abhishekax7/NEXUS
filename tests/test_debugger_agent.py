@@ -13,15 +13,22 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
+from app.memory.retriever import MemoryRetriever
+from app.memory.store import MemoryStore
 
 
 class FakeDebuggerLLM:
+    def __init__(self):
+        self.last_user_prompt = None
+
     def generate(
         self,
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
     ) -> str:
+        self.last_user_prompt = user_prompt
+
         return json.dumps(
             {
                 "root_cause": "Incorrect return value in app.py",
@@ -238,7 +245,7 @@ def create_failed_test_artifact() -> Artifact:
                     "command": "pytest -v",
                     "exit_code": 1,
                     "stdout": "",
-                    "stderr": "AssertionError",
+                    "stderr": "AssertionError: expected True",
                     "timed_out": False,
                     "passed": False,
                 }
@@ -311,6 +318,21 @@ def build_state_and_task(
     return state, task
 
 
+def build_retriever(
+    tmp_path,
+):
+    store = MemoryStore(
+        db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    return store, MemoryRetriever(
+        store
+    )
+
+
 def test_debugger_returns_debug_report():
     state, task = build_state_and_task()
 
@@ -345,6 +367,269 @@ def test_debugger_returns_debug_report():
     assert (
         artifact.metadata["patch_count"]
         == 1
+    )
+
+
+def test_debugger_without_memory_preserves_old_behavior():
+    state, task = build_state_and_task()
+
+    agent = DebuggerAgent(
+        llm_client=FakeDebuggerLLM()
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_augmented"]
+        is False
+    )
+
+    assert (
+        artifact.metadata["memory_context_count"]
+        == 0
+    )
+
+
+def test_debugger_injects_relevant_past_repair(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="repair",
+        key="boolean_failure_fix",
+        value={
+            "root_cause": (
+                "Function returned False "
+                "instead of True."
+            ),
+            "failure_summary": (
+                "AssertionError expected True"
+            ),
+            "patches": [
+                {
+                    "path": "app.py",
+                    "reason": (
+                        "Return True from run function."
+                    ),
+                }
+            ],
+        },
+    )
+
+    state, task = build_state_and_task()
+
+    fake_llm = FakeDebuggerLLM()
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_augmented"]
+        is True
+    )
+
+    assert (
+        artifact.metadata["memory_context_count"]
+        >= 1
+    )
+
+    assert (
+        "boolean_failure_fix"
+        in fake_llm.last_user_prompt
+    )
+
+    assert (
+        "Return True from run function"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_debugger_injects_relevant_past_failure(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="failure",
+        key="assertion_failure",
+        value={
+            "error": (
+                "AssertionError expected True"
+            ),
+            "title": "Generated code test failure",
+        },
+    )
+
+    state, task = build_state_and_task()
+
+    fake_llm = FakeDebuggerLLM()
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_augmented"]
+        is True
+    )
+
+    assert (
+        "assertion_failure"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_debugger_excludes_current_run_memory(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    state, task = build_state_and_task()
+
+    store.save(
+        run_id=state.run_id,
+        memory_type="repair",
+        key="current_run_repair",
+        value={
+            "failure_summary": (
+                "AssertionError expected True"
+            ),
+            "root_cause": "Same current failure",
+        },
+    )
+
+    fake_llm = FakeDebuggerLLM()
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_augmented"]
+        is False
+    )
+
+    assert (
+        "current_run_repair"
+        not in fake_llm.last_user_prompt
+    )
+
+
+def test_debugger_does_not_inject_irrelevant_memory(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    store.save(
+        run_id="old-run",
+        memory_type="repair",
+        key="unrelated_database_fix",
+        value={
+            "root_cause": (
+                "PostgreSQL connection timeout"
+            ),
+            "failure_summary": (
+                "Database unavailable"
+            ),
+        },
+    )
+
+    state, task = build_state_and_task()
+
+    fake_llm = FakeDebuggerLLM()
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm,
+        memory_retriever=retriever,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_augmented"]
+        is False
+    )
+
+    assert (
+        artifact.metadata["memory_context_count"]
+        == 0
+    )
+
+
+def test_debugger_respects_memory_limit(
+    tmp_path,
+):
+    store, retriever = build_retriever(
+        tmp_path
+    )
+
+    for index in range(5):
+        store.save(
+            run_id=f"old-run-{index}",
+            memory_type="repair",
+            key=f"assertion_fix_{index}",
+            value={
+                "failure_summary": (
+                    "AssertionError expected True"
+                ),
+                "root_cause": (
+                    "Function returned False"
+                ),
+            },
+        )
+
+    state, task = build_state_and_task()
+
+    agent = DebuggerAgent(
+        llm_client=FakeDebuggerLLM(),
+        memory_retriever=retriever,
+        memory_limit=2,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.metadata["memory_context_count"]
+        <= 2
     )
 
 
@@ -465,7 +750,10 @@ def test_debugger_fails_without_code_artifact():
     )
 
     test_artifact = create_failed_test_artifact()
-    state.add_artifact(test_artifact)
+
+    state.add_artifact(
+        test_artifact
+    )
 
     task = AgentTask(
         title="Debug implementation",
@@ -496,7 +784,10 @@ def test_debugger_fails_without_test_result():
     )
 
     code_artifact = create_code_artifact()
-    state.add_artifact(code_artifact)
+
+    state.add_artifact(
+        code_artifact
+    )
 
     task = AgentTask(
         title="Debug implementation",
@@ -523,7 +814,9 @@ def test_debugger_fails_without_test_result():
 
 def test_debugger_does_not_run_when_tests_pass():
     state, task = build_state_and_task(
-        test_artifact=create_passing_test_artifact()
+        test_artifact=(
+            create_passing_test_artifact()
+        )
     )
 
     agent = DebuggerAgent(
