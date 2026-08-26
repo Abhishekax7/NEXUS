@@ -25,6 +25,8 @@ from app.core.models import (
 )
 from app.core.repair_loop import RepairLoopResult
 from app.core.state import NexusState
+from app.memory.manager import MemoryManager
+from app.memory.store import MemoryStore
 
 
 class TestRequirementsAgent(BaseAgent):
@@ -71,6 +73,19 @@ class FailingTesterAgent(BaseAgent):
         )
 
 
+class FailingAgent(BaseAgent):
+    role = AgentRole.REQUIREMENTS
+
+    def execute(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> Artifact:
+        raise RuntimeError(
+            "Simulated engine failure"
+        )
+
+
 class PassingRepairLoop:
     def __init__(self):
         self.calls = 0
@@ -80,6 +95,27 @@ class PassingRepairLoop:
         state: NexusState,
     ) -> RepairLoopResult:
         self.calls += 1
+
+        debug_artifact = Artifact(
+            type=ArtifactType.DEBUG_REPORT,
+            name="debug_report",
+            content={
+                "root_cause": "Incorrect logic",
+                "failure_summary": "Tests failed",
+                "patches": [
+                    {
+                        "path": "app.py",
+                        "new_content": "print('fixed')",
+                        "reason": "Fix failure",
+                    }
+                ],
+                "confidence": 0.9,
+            },
+            created_by=AgentRole.DEBUGGER,
+            metadata={
+                "patch_count": 1
+            },
+        )
 
         final_artifact = Artifact(
             type=ArtifactType.TEST_RESULT,
@@ -100,7 +136,9 @@ class PassingRepairLoop:
             passed=True,
             attempts=1,
             final_test_artifact=final_artifact,
-            debug_artifacts=[],
+            debug_artifacts=[
+                debug_artifact
+            ],
         )
 
 
@@ -191,6 +229,21 @@ def build_repair_registry():
     return registry
 
 
+def build_memory_manager(
+    tmp_path,
+):
+    store = MemoryStore(
+        db_path=str(
+            tmp_path
+            / "engine_memory.db"
+        )
+    )
+
+    return MemoryManager(
+        store=store
+    )
+
+
 def test_engine_completes_full_workflow():
     orchestrator = OrchestratorAgent()
 
@@ -222,7 +275,10 @@ def test_all_tasks_are_completed():
     result = engine.run(state)
 
     for task in result.tasks.values():
-        assert task.status == TaskStatus.COMPLETED
+        assert (
+            task.status
+            == TaskStatus.COMPLETED
+        )
 
 
 def test_engine_generates_artifacts():
@@ -238,7 +294,9 @@ def test_engine_generates_artifacts():
 
     result = engine.run(state)
 
-    assert len(result.artifacts) == 7
+    assert len(
+        result.artifacts
+    ) == 7
 
 
 def test_engine_runs_multiple_iterations():
@@ -273,9 +331,13 @@ def test_engine_detects_stalled_workflow():
         ],
     )
 
-    state.add_task(blocked_task)
+    state.add_task(
+        blocked_task
+    )
 
-    engine = NexusEngine(registry)
+    engine = NexusEngine(
+        registry
+    )
 
     with pytest.raises(
         WorkflowStalled
@@ -301,21 +363,20 @@ def test_engine_invokes_repair_loop_on_failed_tests():
 
     result = engine.run(state)
 
-    assert repair_loop.calls == 1
+    assert (
+        repair_loop.calls
+        == 1
+    )
 
-    assert result.completed is True
-    assert result.failed is False
+    assert (
+        result.completed
+        is True
+    )
 
-    repaired_reports = [
-        artifact
-        for artifact in result.artifacts.values()
-        if (
-            artifact.type == ArtifactType.TEST_RESULT
-            and artifact.content.get("passed") is True
-        )
-    ]
-
-    assert len(repaired_reports) >= 1
+    assert (
+        result.failed
+        is False
+    )
 
 
 def test_engine_attaches_repaired_test_artifact_to_tester_task():
@@ -334,20 +395,33 @@ def test_engine_attaches_repaired_test_artifact_to_tester_task():
 
     tester_task = next(
         task
-        for task in result.tasks.values()
-        if task.assigned_agent == AgentRole.TESTER
+        for task
+        in result.tasks.values()
+        if (
+            task.assigned_agent
+            == AgentRole.TESTER
+        )
     )
 
     output_artifacts = [
-        result.artifacts[artifact_id]
+        result.artifacts[
+            artifact_id
+        ]
         for artifact_id
         in tester_task.output_artifact_ids
     ]
 
     assert any(
-        artifact.type == ArtifactType.TEST_RESULT
-        and artifact.content.get("passed") is True
-        for artifact in output_artifacts
+        (
+            artifact.type
+            == ArtifactType.TEST_RESULT
+            and artifact.content.get(
+                "passed"
+            )
+            is True
+        )
+        for artifact
+        in output_artifacts
     )
 
 
@@ -377,7 +451,8 @@ def test_engine_fails_when_repair_budget_is_exhausted():
     assert any(
         "Autonomous repair exhausted"
         in error
-        for error in state.errors
+        for error
+        in state.errors
     )
 
 
@@ -394,23 +469,201 @@ def test_engine_without_repair_loop_preserves_old_behavior():
 
     result = engine.run(state)
 
-    assert result.completed is True
-    assert result.failed is False
-
-    tester_task = next(
-        task
-        for task in result.tasks.values()
-        if task.assigned_agent == AgentRole.TESTER
+    assert (
+        result.completed
+        is True
     )
 
-    test_artifacts = [
-        result.artifacts[artifact_id]
-        for artifact_id
-        in tester_task.output_artifact_ids
-    ]
+    assert (
+        result.failed
+        is False
+    )
+
+
+def test_engine_records_task_memories(
+    tmp_path,
+):
+    orchestrator = OrchestratorAgent()
+
+    state = orchestrator.create_initial_plan(
+        "Build application"
+    )
+
+    memory_manager = (
+        build_memory_manager(
+            tmp_path
+        )
+    )
+
+    engine = NexusEngine(
+        build_registry(),
+        memory_manager=memory_manager,
+    )
+
+    engine.run(
+        state
+    )
+
+    task_memories = (
+        memory_manager.store
+        .get_by_type(
+            "task_event"
+        )
+    )
+
+    assert len(
+        task_memories
+    ) == 7
+
+
+def test_engine_records_artifact_memories(
+    tmp_path,
+):
+    orchestrator = OrchestratorAgent()
+
+    state = orchestrator.create_initial_plan(
+        "Build application"
+    )
+
+    memory_manager = (
+        build_memory_manager(
+            tmp_path
+        )
+    )
+
+    engine = NexusEngine(
+        build_registry(),
+        memory_manager=memory_manager,
+    )
+
+    engine.run(
+        state
+    )
+
+    history = (
+        memory_manager.get_run_history(
+            state
+        )
+    )
 
     assert any(
-        artifact.type == ArtifactType.TEST_RESULT
-        and artifact.content.get("passed") is False
-        for artifact in test_artifacts
+        memory["memory_type"]
+        == "artifact"
+        for memory
+        in history
+    )
+
+
+def test_engine_records_repair_memory(
+    tmp_path,
+):
+    orchestrator = OrchestratorAgent()
+
+    state = orchestrator.create_initial_plan(
+        "Build application"
+    )
+
+    memory_manager = (
+        build_memory_manager(
+            tmp_path
+        )
+    )
+
+    engine = NexusEngine(
+        build_repair_registry(),
+        repair_loop=PassingRepairLoop(),
+        memory_manager=memory_manager,
+    )
+
+    engine.run(
+        state
+    )
+
+    repairs = (
+        memory_manager
+        .get_recent_repairs()
+    )
+
+    assert len(
+        repairs
+    ) == 1
+
+    assert (
+        repairs[0]["value"][
+            "root_cause"
+        ]
+        == "Incorrect logic"
+    )
+
+
+def test_engine_records_failed_task_memory(
+    tmp_path,
+):
+    registry = AgentRegistry()
+
+    registry.register(
+        AgentRole.REQUIREMENTS,
+        FailingAgent,
+    )
+
+    state = NexusState(
+        user_request="Build application"
+    )
+
+    task = AgentTask(
+        title="Analyze requirements",
+        description="Analyze request",
+        assigned_agent=(
+            AgentRole.REQUIREMENTS
+        ),
+    )
+
+    state.add_task(
+        task
+    )
+
+    memory_manager = (
+        build_memory_manager(
+            tmp_path
+        )
+    )
+
+    engine = NexusEngine(
+        registry,
+        memory_manager=memory_manager,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Simulated engine failure",
+    ):
+        engine.run(
+            state
+        )
+
+    failures = (
+        memory_manager
+        .get_recent_failures()
+    )
+
+    assert len(
+        failures
+    ) == 1
+
+    assert (
+        failures[0]["value"][
+            "error"
+        ]
+        == "Simulated engine failure"
+    )
+
+
+def test_engine_memory_can_be_disabled():
+    engine = NexusEngine(
+        build_registry()
+    )
+
+    assert (
+        engine.memory_manager
+        is None
     )

@@ -9,6 +9,7 @@ from app.core.scheduler import (
     get_ready_tasks,
 )
 from app.core.state import NexusState
+from app.memory.manager import MemoryManager
 
 
 class WorkflowStalled(Exception):
@@ -24,6 +25,7 @@ class NexusEngine:
         self,
         registry: AgentRegistry,
         repair_loop: Optional[RepairLoop] = None,
+        memory_manager: Optional[MemoryManager] = None,
     ):
         self.registry = registry
 
@@ -32,6 +34,49 @@ class NexusEngine:
         )
 
         self.repair_loop = repair_loop
+        self.memory_manager = memory_manager
+
+    def _remember_task(
+        self,
+        task,
+        state: NexusState,
+    ) -> None:
+        if self.memory_manager is None:
+            return
+
+        self.memory_manager.remember_task(
+            task,
+            state,
+        )
+
+    def _remember_artifact(
+        self,
+        artifact,
+        state: NexusState,
+    ) -> None:
+        if self.memory_manager is None:
+            return
+
+        self.memory_manager.record_important_artifact(
+            artifact,
+            state,
+        )
+
+    def _remember_repair_artifacts(
+        self,
+        repair_result,
+        state: NexusState,
+    ) -> None:
+        if self.memory_manager is None:
+            return
+
+        for debug_artifact in (
+            repair_result.debug_artifacts
+        ):
+            self.memory_manager.record_repair(
+                debug_artifact,
+                state,
+            )
 
     def _handle_test_result(
         self,
@@ -39,12 +84,6 @@ class NexusEngine:
         artifact,
         state: NexusState,
     ) -> None:
-        """
-        If the Tester Agent reports failure and a repair
-        loop is configured, automatically invoke bounded
-        self-healing.
-        """
-
         if (
             task.assigned_agent
             != AgentRole.TESTER
@@ -63,6 +102,11 @@ class NexusEngine:
             self.repair_loop.run(
                 state
             )
+        )
+
+        self._remember_repair_artifacts(
+            repair_result,
+            state,
         )
 
         final_test_artifact = (
@@ -84,6 +128,11 @@ class NexusEngine:
             task.output_artifact_ids.append(
                 final_test_artifact.id
             )
+
+        self._remember_artifact(
+            final_test_artifact,
+            state,
+        )
 
         if not repair_result.passed:
             state.failed = True
@@ -135,6 +184,16 @@ class NexusEngine:
                         )
                     )
 
+                    self._remember_task(
+                        task,
+                        state,
+                    )
+
+                    self._remember_artifact(
+                        artifact,
+                        state,
+                    )
+
                     self._handle_test_result(
                         task,
                         artifact,
@@ -143,6 +202,12 @@ class NexusEngine:
 
                 except Exception:
                     state.failed = True
+
+                    self._remember_task(
+                        task,
+                        state,
+                    )
+
                     raise
 
             state.iteration += 1
