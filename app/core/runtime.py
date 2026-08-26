@@ -18,7 +18,14 @@ from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import MemoryStore
 from app.tools.executor import CommandExecutor
+from app.tools.executor_runtime import ToolExecutor
 from app.tools.patcher import PatchApplicator
+from app.tools.production import (
+    build_production_tool_registry,
+)
+from app.tools.registry import ToolRegistry
+from app.tools.runtime import ToolRuntime
+from app.tools.selector import ToolSelector
 from app.tools.workspace import WorkspaceWriter
 
 
@@ -143,6 +150,45 @@ def build_plan_mutator() -> PlanMutator:
     return PlanMutator()
 
 
+def build_tool_registry(
+    workspace_root: str = DEFAULT_WORKSPACE_ROOT,
+    memory_retriever: Optional[
+        MemoryRetriever
+    ] = None,
+) -> ToolRegistry:
+    """
+    Build the production allow-listed
+    NEXUS tool registry.
+    """
+
+    return build_production_tool_registry(
+        workspace_root=workspace_root,
+        memory_retriever=memory_retriever,
+    )
+
+
+def build_tool_runtime(
+    tool_registry: ToolRegistry,
+) -> ToolRuntime:
+    """
+    Build the production dynamic tool
+    selection + execution subsystem.
+    """
+
+    selector = ToolSelector(
+        registry=tool_registry
+    )
+
+    executor = ToolExecutor(
+        registry=tool_registry
+    )
+
+    return ToolRuntime(
+        selector=selector,
+        executor=executor,
+    )
+
+
 def build_nexus_engine(
     workspace_root: str = DEFAULT_WORKSPACE_ROOT,
     memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
@@ -152,6 +198,7 @@ def build_nexus_engine(
     enable_self_healing: bool = True,
     enable_memory: bool = True,
     enable_replanning: bool = True,
+    enable_tools: bool = True,
 ) -> NexusEngine:
     memory_manager = None
     memory_retriever = None
@@ -188,7 +235,20 @@ def build_nexus_engine(
         replanner = build_replanner()
         plan_mutator = build_plan_mutator()
 
-    return NexusEngine(
+    tool_registry = None
+    tool_runtime = None
+
+    if enable_tools:
+        tool_registry = build_tool_registry(
+            workspace_root=workspace_root,
+            memory_retriever=memory_retriever,
+        )
+
+        tool_runtime = build_tool_runtime(
+            tool_registry
+        )
+
+    engine = NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
         memory_manager=memory_manager,
@@ -197,3 +257,12 @@ def build_nexus_engine(
         max_replans=max_replans,
     )
 
+    engine.tool_registry = (
+        tool_registry
+    )
+
+    engine.tool_runtime = (
+        tool_runtime
+    )
+
+    return engine

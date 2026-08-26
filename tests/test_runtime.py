@@ -20,9 +20,13 @@ from app.core.runtime import (
     build_plan_mutator,
     build_repair_loop,
     build_replanner,
+    build_tool_registry,
+    build_tool_runtime,
 )
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
+from app.tools.registry import ToolRegistry
+from app.tools.runtime import ToolRuntime
 
 
 def test_default_registry_contains_core_agents():
@@ -329,6 +333,100 @@ def test_build_plan_mutator():
     )
 
 
+def test_build_tool_registry_without_memory(
+    tmp_path,
+):
+    registry = build_tool_registry(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_retriever=None,
+    )
+
+    assert isinstance(
+        registry,
+        ToolRegistry,
+    )
+
+    names = set(
+        registry.names()
+    )
+
+    assert (
+        "list_workspace_files"
+        in names
+    )
+
+    assert (
+        "read_text_file"
+        in names
+    )
+
+    assert (
+        "search_memory"
+        not in names
+    )
+
+
+def test_build_tool_registry_with_memory(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    retriever = build_memory_retriever(
+        manager
+    )
+
+    registry = build_tool_registry(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_retriever=retriever,
+    )
+
+    assert (
+        "search_memory"
+        in registry.names()
+    )
+
+
+def test_build_tool_runtime(
+    tmp_path,
+):
+    registry = build_tool_registry(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        )
+    )
+
+    runtime = build_tool_runtime(
+        registry
+    )
+
+    assert isinstance(
+        runtime,
+        ToolRuntime,
+    )
+
+    assert (
+        runtime.selector.registry
+        is registry
+    )
+
+    assert (
+        runtime.executor.registry
+        is registry
+    )
+
+
 def test_engine_enables_replanning_by_default(
     tmp_path,
 ):
@@ -341,6 +439,7 @@ def test_engine_enables_replanning_by_default(
             tmp_path
             / "memory.db"
         ),
+        enable_tools=False,
     )
 
     assert isinstance(
@@ -377,6 +476,7 @@ def test_engine_can_disable_replanning(
             / "memory.db"
         ),
         enable_replanning=False,
+        enable_tools=False,
     )
 
     assert (
@@ -398,6 +498,7 @@ def test_engine_uses_configured_replan_budget(
             / "memory.db"
         ),
         max_replans=7,
+        enable_tools=False,
     )
 
     assert (
@@ -406,7 +507,179 @@ def test_engine_uses_configured_replan_budget(
     )
 
 
-def test_engine_memory_is_shared_with_architect_debugger_and_critic(
+def test_engine_enables_tools_by_default(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+    )
+
+    assert (
+        engine.tool_registry
+        is not None
+    )
+
+    assert (
+        engine.tool_runtime
+        is not None
+    )
+
+    assert isinstance(
+        engine.tool_registry,
+        ToolRegistry,
+    )
+
+    assert isinstance(
+        engine.tool_runtime,
+        ToolRuntime,
+    )
+
+
+def test_engine_can_disable_tools(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+        enable_tools=False,
+    )
+
+    assert (
+        engine.tool_registry
+        is None
+    )
+
+    assert (
+        engine.tool_runtime
+        is None
+    )
+
+
+def test_engine_tool_registry_contains_workspace_tools(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+        enable_memory=False,
+        enable_tools=True,
+    )
+
+    names = set(
+        engine.tool_registry.names()
+    )
+
+    assert (
+        "list_workspace_files"
+        in names
+    )
+
+    assert (
+        "read_text_file"
+        in names
+    )
+
+
+def test_engine_tool_registry_contains_memory_tool_when_memory_enabled(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+        enable_memory=True,
+        enable_tools=True,
+    )
+
+    assert (
+        "search_memory"
+        in engine.tool_registry.names()
+    )
+
+
+def test_engine_tool_registry_excludes_memory_tool_when_memory_disabled(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+        enable_memory=False,
+        enable_tools=True,
+    )
+
+    assert (
+        "search_memory"
+        not in engine.tool_registry.names()
+    )
+
+
+def test_engine_tool_runtime_uses_engine_registry(
+    tmp_path,
+):
+    engine = build_nexus_engine(
+        workspace_root=str(
+            tmp_path
+            / "workspace"
+        ),
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        ),
+        enable_replanning=False,
+        enable_tools=True,
+    )
+
+    assert (
+        engine.tool_runtime
+        .selector
+        .registry
+        is engine.tool_registry
+    )
+
+    assert (
+        engine.tool_runtime
+        .executor
+        .registry
+        is engine.tool_registry
+    )
+
+
+def test_engine_memory_is_shared_with_architect_debugger_critic_and_tools(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -421,6 +694,7 @@ def test_engine_memory_is_shared_with_architect_debugger_and_critic(
         enable_self_healing=True,
         enable_memory=True,
         enable_replanning=False,
+        enable_tools=True,
     )
 
     assert (
@@ -478,8 +752,24 @@ def test_engine_memory_is_shared_with_architect_debugger_and_critic(
         is engine.memory_manager.store
     )
 
+    assert (
+        "search_memory"
+        in engine.tool_registry.names()
+    )
 
-def test_engine_without_memory_has_plain_memory_aware_agents(
+    memory_handler = (
+        engine.tool_registry
+        .get_handler(
+            "search_memory"
+        )
+    )
+
+    assert callable(
+        memory_handler
+    )
+
+
+def test_engine_without_memory_has_plain_memory_aware_agents_and_no_memory_tool(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -494,6 +784,7 @@ def test_engine_without_memory_has_plain_memory_aware_agents(
         enable_self_healing=True,
         enable_memory=False,
         enable_replanning=False,
+        enable_tools=True,
     )
 
     architect = (
@@ -530,6 +821,11 @@ def test_engine_without_memory_has_plain_memory_aware_agents(
         is None
     )
 
+    assert (
+        "search_memory"
+        not in engine.tool_registry.names()
+    )
+
 
 def test_build_engine_without_self_healing(
     tmp_path,
@@ -546,6 +842,7 @@ def test_build_engine_without_self_healing(
         enable_self_healing=False,
         enable_memory=True,
         enable_replanning=False,
+        enable_tools=False,
     )
 
     assert engine.repair_loop is None
@@ -593,11 +890,14 @@ def test_build_engine_without_optional_subsystems(
         enable_self_healing=False,
         enable_memory=False,
         enable_replanning=False,
+        enable_tools=False,
     )
 
     assert engine.repair_loop is None
     assert engine.memory_manager is None
     assert engine.replanner is None
+    assert engine.tool_registry is None
+    assert engine.tool_runtime is None
 
     architect = (
         engine.registry.get_agent(
