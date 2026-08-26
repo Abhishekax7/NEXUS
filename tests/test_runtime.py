@@ -143,6 +143,19 @@ def test_default_architect_has_no_memory():
     )
 
 
+def test_default_critic_has_no_memory():
+    registry = build_default_registry()
+
+    critic = registry.get_agent(
+        AgentRole.CRITIC
+    )
+
+    assert (
+        critic.memory_retriever
+        is None
+    )
+
+
 def test_registry_injects_memory_into_architect(
     tmp_path,
 ):
@@ -167,6 +180,34 @@ def test_registry_injects_memory_into_architect(
 
     assert (
         architect.memory_retriever
+        is retriever
+    )
+
+
+def test_registry_injects_memory_into_critic(
+    tmp_path,
+):
+    manager = build_memory_manager(
+        memory_db_path=str(
+            tmp_path
+            / "memory.db"
+        )
+    )
+
+    retriever = build_memory_retriever(
+        manager
+    )
+
+    registry = build_default_registry(
+        memory_retriever=retriever
+    )
+
+    critic = registry.get_agent(
+        AgentRole.CRITIC
+    )
+
+    assert (
+        critic.memory_retriever
         is retriever
     )
 
@@ -266,7 +307,7 @@ def test_build_repair_loop_with_memory(
     )
 
 
-def test_engine_memory_is_shared_with_architect_and_debugger(
+def test_engine_memory_is_shared_with_architect_debugger_and_critic(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -298,6 +339,12 @@ def test_engine_memory_is_shared_with_architect_and_debugger(
         )
     )
 
+    critic = (
+        engine.registry.get_agent(
+            AgentRole.CRITIC
+        )
+    )
+
     debugger_retriever = (
         engine.repair_loop
         .debugger
@@ -308,8 +355,13 @@ def test_engine_memory_is_shared_with_architect_and_debugger(
         architect.memory_retriever
     )
 
+    critic_retriever = (
+        critic.memory_retriever
+    )
+
     assert architect_retriever is not None
     assert debugger_retriever is not None
+    assert critic_retriever is not None
 
     assert (
         architect_retriever.store
@@ -321,8 +373,13 @@ def test_engine_memory_is_shared_with_architect_and_debugger(
         is engine.memory_manager.store
     )
 
+    assert (
+        critic_retriever.store
+        is engine.memory_manager.store
+    )
 
-def test_engine_without_memory_has_plain_architect_and_debugger(
+
+def test_engine_without_memory_has_plain_memory_aware_agents(
     tmp_path,
 ):
     engine = build_nexus_engine(
@@ -344,8 +401,19 @@ def test_engine_without_memory_has_plain_architect_and_debugger(
         )
     )
 
+    critic = (
+        engine.registry.get_agent(
+            AgentRole.CRITIC
+        )
+    )
+
     assert (
         architect.memory_retriever
+        is None
+    )
+
+    assert (
+        critic.memory_retriever
         is None
     )
 
@@ -391,8 +459,19 @@ def test_build_engine_without_self_healing(
         )
     )
 
+    critic = (
+        engine.registry.get_agent(
+            AgentRole.CRITIC
+        )
+    )
+
     assert (
         architect.memory_retriever
+        is not None
+    )
+
+    assert (
+        critic.memory_retriever
         is not None
     )
 
@@ -422,64 +501,18 @@ def test_build_engine_without_optional_subsystems(
         )
     )
 
+    critic = (
+        engine.registry.get_agent(
+            AgentRole.CRITIC
+        )
+    )
+
     assert (
         architect.memory_retriever
         is None
     )
-def test_registry_injects_memory_into_critic(
-    tmp_path,
-):
-    manager = build_memory_manager(
-        memory_db_path=str(
-            tmp_path
-            / "memory.db"
-        )
-    )
-
-    retriever = build_memory_retriever(
-        manager
-    )
-
-    registry = build_default_registry(
-        memory_retriever=retriever
-    )
-
-    critic = registry.get_agent(
-        AgentRole.CRITIC
-    )
 
     assert (
         critic.memory_retriever
-        is retriever
-    )
-
-
-def test_engine_memory_is_shared_with_critic(
-    tmp_path,
-):
-    engine = build_nexus_engine(
-        workspace_root=str(
-            tmp_path
-            / "workspace"
-        ),
-        memory_db_path=str(
-            tmp_path
-            / "memory.db"
-        ),
-        enable_self_healing=True,
-        enable_memory=True,
-    )
-
-    critic = engine.registry.get_agent(
-        AgentRole.CRITIC
-    )
-
-    assert (
-        critic.memory_retriever
-        is not None
-    )
-
-    assert (
-        critic.memory_retriever.store
-        is engine.memory_manager.store
+        is None
     )
