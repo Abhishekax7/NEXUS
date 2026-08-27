@@ -21,57 +21,86 @@ class FakeCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         return json.dumps(
             {
-                "project_name": "rag_assistant",
-                "summary": "A simple modular RAG assistant.",
+                "project_name":
+                    "rag_assistant",
+
+                "summary":
+                    "A simple modular "
+                    "RAG assistant.",
+
                 "files": [
                     {
-                        "path": "app.py",
+                        "path":
+                            "app.py",
+
                         "content": (
-                            "from fastapi import FastAPI\n"
+                            "from fastapi import "
+                            "FastAPI\n"
                             "\n"
                             "app = FastAPI()\n"
                             "\n"
                             "@app.get('/health')\n"
                             "def health():\n"
-                            "    return {'status': 'ok'}\n"
+                            "    return "
+                            "{'status': 'ok'}\n"
                         ),
-                        "purpose": "Application entry point.",
+
+                        "purpose":
+                            "Application entry "
+                            "point.",
                     },
                     {
-                        "path": "tests/test_app.py",
+                        "path":
+                            "tests/test_app.py",
+
                         "content": (
                             "def test_placeholder():\n"
                             "    assert True\n"
                         ),
-                        "purpose": "Initial test suite.",
+
+                        "purpose":
+                            "Initial test suite.",
                     },
                     {
-                        "path": "requirements.txt",
+                        "path":
+                            "requirements.txt",
+
                         "content": (
                             "fastapi\n"
                             "uvicorn\n"
                             "pytest\n"
                         ),
-                        "purpose": "Project dependencies.",
+
+                        "purpose":
+                            "Project dependencies.",
                     },
                 ],
+
                 "dependencies": [
                     "fastapi",
                     "uvicorn",
                     "pytest",
                 ],
+
                 "run_commands": [
                     "uvicorn app:app --reload",
                 ],
+
                 "test_commands": [
                     "pytest -v",
                 ],
+
                 "implementation_notes": [
-                    "Uses a modular FastAPI foundation.",
-                    "Future retrieval components can be added separately.",
+                    "Uses a modular "
+                    "FastAPI foundation.",
+
+                    "Future retrieval "
+                    "components can be "
+                    "added separately.",
                 ],
             }
         )
@@ -86,13 +115,17 @@ class CapturingCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
-        self.last_user_prompt = user_prompt
+        self.last_user_prompt = (
+            user_prompt
+        )
 
         return FakeCoderLLM().generate(
             system_prompt,
             user_prompt,
             json_mode,
+            max_tokens,
         )
 
 
@@ -105,14 +138,19 @@ class RepairingCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         self.calls += 1
 
         if self.calls == 1:
             return json.dumps(
                 {
-                    "project_name": "broken_project",
-                    "summary": "Incomplete output",
+                    "project_name":
+                        "broken_project",
+
+                    "summary":
+                        "Incomplete output",
+
                     "files": [],
                 }
             )
@@ -121,6 +159,7 @@ class RepairingCoderLLM:
             system_prompt,
             user_prompt,
             json_mode,
+            max_tokens,
         )
 
 
@@ -130,18 +169,26 @@ class PathTraversalCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
                 system_prompt,
                 user_prompt,
                 json_mode,
+                max_tokens,
             )
         )
 
-        data["files"][0]["path"] = "../secret.txt"
+        data[
+            "files"
+        ][0][
+            "path"
+        ] = "../secret.txt"
 
-        return json.dumps(data)
+        return json.dumps(
+            data
+        )
 
 
 class AbsolutePathCoderLLM:
@@ -150,18 +197,26 @@ class AbsolutePathCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
                 system_prompt,
                 user_prompt,
                 json_mode,
+                max_tokens,
             )
         )
 
-        data["files"][0]["path"] = "/tmp/app.py"
+        data[
+            "files"
+        ][0][
+            "path"
+        ] = "/tmp/app.py"
 
-        return json.dumps(data)
+        return json.dumps(
+            data
+        )
 
 
 class DuplicatePathCoderLLM:
@@ -170,18 +225,26 @@ class DuplicatePathCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
                 system_prompt,
                 user_prompt,
                 json_mode,
+                max_tokens,
             )
         )
 
-        data["files"][1]["path"] = "app.py"
+        data[
+            "files"
+        ][1][
+            "path"
+        ] = "app.py"
 
-        return json.dumps(data)
+        return json.dumps(
+            data
+        )
 
 
 class AlwaysInvalidCoderLLM:
@@ -190,34 +253,72 @@ class AlwaysInvalidCoderLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: int | None = None,
     ) -> str:
         return "{}"
 
 
+class TokenCapturingCoderLLM:
+    def __init__(self):
+        self.max_tokens = None
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+    ) -> str:
+        self.max_tokens = (
+            max_tokens
+        )
+
+        return FakeCoderLLM().generate(
+            system_prompt,
+            user_prompt,
+            json_mode,
+            max_tokens,
+        )
+
+
 def create_requirements_artifact() -> Artifact:
     return Artifact(
-        type=ArtifactType.REQUIREMENTS,
-        name="requirements_analysis",
+        type=(
+            ArtifactType.REQUIREMENTS
+        ),
+        name=(
+            "requirements_analysis"
+        ),
         content={
-            "objective": "Build a RAG application",
+            "objective":
+                "Build a RAG application",
+
             "functional_requirements": [
                 "Upload PDFs",
-                "Answer questions with citations",
+                "Answer questions "
+                "with citations",
             ],
+
             "non_functional_requirements": [
                 "Fast responses",
             ],
+
             "constraints": [
                 "Use free tools",
             ],
+
             "assumptions": [
-                "PDFs contain readable text",
+                "PDFs contain "
+                "readable text",
             ],
+
             "acceptance_criteria": [
                 "Answers contain citations",
             ],
         },
-        created_by=AgentRole.REQUIREMENTS,
+        created_by=(
+            AgentRole.REQUIREMENTS
+        ),
     )
 
 
@@ -227,96 +328,172 @@ def create_research_artifact() -> Artifact:
         name="technical_research",
         content={
             "research_question": (
-                "Which technologies should be used?"
+                "Which technologies "
+                "should be used?"
             ),
+
             "findings": [
-                "FastAPI works well for Python APIs.",
-                "FAISS supports local vector retrieval.",
+                "FastAPI works well "
+                "for Python APIs.",
+
+                "FAISS supports local "
+                "vector retrieval.",
             ],
+
             "recommended_technologies": [
                 "FastAPI",
                 "FAISS",
             ],
+
             "tradeoffs": [
-                "Local inference increases hardware requirements.",
+                "Local inference "
+                "increases hardware "
+                "requirements.",
             ],
+
             "risks": [
-                "Large models may have high memory requirements.",
+                "Large models may "
+                "have high memory "
+                "requirements.",
             ],
+
             "sources": [
                 {
-                    "title": "FastAPI Documentation",
-                    "url": "https://fastapi.tiangolo.com/",
-                    "summary": "Official FastAPI documentation.",
+                    "title":
+                        "FastAPI Documentation",
+
+                    "url":
+                        "https://fastapi.tiangolo.com/",
+
+                    "summary":
+                        "Official FastAPI "
+                        "documentation.",
                 }
             ],
         },
-        created_by=AgentRole.RESEARCH,
+        created_by=(
+            AgentRole.RESEARCH
+        ),
     )
 
 
 def create_architecture_artifact() -> Artifact:
     return Artifact(
-        type=ArtifactType.ARCHITECTURE,
-        name="architecture_design",
+        type=(
+            ArtifactType.ARCHITECTURE
+        ),
+        name=(
+            "architecture_design"
+        ),
         content={
-            "architecture_style": "Layered modular architecture",
+            "architecture_style":
+                "Layered modular "
+                "architecture",
+
             "components": [
                 {
-                    "name": "API Layer",
-                    "responsibility": "Expose application endpoints",
-                    "technology": "FastAPI",
+                    "name":
+                        "API Layer",
+
+                    "responsibility":
+                        "Expose application "
+                        "endpoints",
+
+                    "technology":
+                        "FastAPI",
                 },
                 {
-                    "name": "Retrieval Layer",
-                    "responsibility": "Retrieve document chunks",
-                    "technology": "FAISS",
+                    "name":
+                        "Retrieval Layer",
+
+                    "responsibility":
+                        "Retrieve document "
+                        "chunks",
+
+                    "technology":
+                        "FAISS",
                 },
             ],
+
             "data_flow": [
                 "Request enters API layer",
-                "Retrieval layer finds context",
-                "Generation layer creates response",
+
+                "Retrieval layer "
+                "finds context",
+
+                "Generation layer "
+                "creates response",
             ],
+
             "technology_stack": [
                 "Python",
                 "FastAPI",
                 "FAISS",
             ],
+
             "interfaces": [
                 "REST API",
             ],
+
             "security_considerations": [
                 "Validate uploaded files",
             ],
+
             "design_decisions": [
                 "Use modular architecture",
             ],
+
             "research_influences": [
-                "FastAPI and FAISS were selected based on research.",
+                "FastAPI and FAISS "
+                "were selected based "
+                "on research.",
             ],
         },
-        created_by=AgentRole.ARCHITECT,
+        created_by=(
+            AgentRole.ARCHITECT
+        ),
     )
 
 
 def build_state_and_task():
     state = NexusState(
-        user_request="Build a RAG application"
+        user_request=(
+            "Build a RAG application"
+        )
     )
 
-    requirements = create_requirements_artifact()
-    research = create_research_artifact()
-    architecture = create_architecture_artifact()
+    requirements = (
+        create_requirements_artifact()
+    )
 
-    state.add_artifact(requirements)
-    state.add_artifact(research)
-    state.add_artifact(architecture)
+    research = (
+        create_research_artifact()
+    )
+
+    architecture = (
+        create_architecture_artifact()
+    )
+
+    state.add_artifact(
+        requirements
+    )
+
+    state.add_artifact(
+        research
+    )
+
+    state.add_artifact(
+        architecture
+    )
 
     task = AgentTask(
         title="Implement solution",
-        description="Generate application code.",
-        assigned_agent=AgentRole.CODER,
+        description=(
+            "Generate application code."
+        ),
+        assigned_agent=(
+            AgentRole.CODER
+        ),
         input_artifact_ids=[
             architecture.id,
         ],
@@ -326,10 +503,14 @@ def build_state_and_task():
 
 
 def test_coder_agent_returns_code_artifact():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
-        llm_client=FakeCoderLLM()
+        llm_client=(
+            FakeCoderLLM()
+        )
     )
 
     artifact = agent.execute(
@@ -337,31 +518,50 @@ def test_coder_agent_returns_code_artifact():
         state,
     )
 
-    assert artifact.type == ArtifactType.CODE
-    assert artifact.created_by == AgentRole.CODER
+    assert (
+        artifact.type
+        == ArtifactType.CODE
+    )
 
     assert (
-        artifact.content["project_name"]
+        artifact.created_by
+        == AgentRole.CODER
+    )
+
+    assert (
+        artifact.content[
+            "project_name"
+        ]
         == "rag_assistant"
     )
 
     assert len(
-        artifact.content["files"]
+        artifact.content[
+            "files"
+        ]
     ) > 0
 
     assert len(
-        artifact.content["dependencies"]
+        artifact.content[
+            "dependencies"
+        ]
     ) > 0
 
     assert len(
-        artifact.content["run_commands"]
+        artifact.content[
+            "run_commands"
+        ]
     ) > 0
 
 
 def test_coder_agent_is_grounded_in_architecture():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = CapturingCoderLLM()
+    fake_llm = (
+        CapturingCoderLLM()
+    )
 
     agent = CoderAgent(
         llm_client=fake_llm
@@ -373,11 +573,16 @@ def test_coder_agent_is_grounded_in_architecture():
     )
 
     assert (
-        artifact.metadata["grounded_in_architecture"]
+        artifact.metadata[
+            "grounded_in_architecture"
+        ]
         is True
     )
 
-    assert fake_llm.last_user_prompt is not None
+    assert (
+        fake_llm.last_user_prompt
+        is not None
+    )
 
     assert (
         "Layered modular architecture"
@@ -391,9 +596,13 @@ def test_coder_agent_is_grounded_in_architecture():
 
 
 def test_coder_agent_receives_requirements_and_research():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = CapturingCoderLLM()
+    fake_llm = (
+        CapturingCoderLLM()
+    )
 
     agent = CoderAgent(
         llm_client=fake_llm
@@ -405,12 +614,16 @@ def test_coder_agent_receives_requirements_and_research():
     )
 
     assert (
-        artifact.metadata["requirements_available"]
+        artifact.metadata[
+            "requirements_available"
+        ]
         is True
     )
 
     assert (
-        artifact.metadata["research_available"]
+        artifact.metadata[
+            "research_available"
+        ]
         is True
     )
 
@@ -420,15 +633,20 @@ def test_coder_agent_receives_requirements_and_research():
     )
 
     assert (
-        "FastAPI works well for Python APIs."
+        "FastAPI works well "
+        "for Python APIs."
         in fake_llm.last_user_prompt
     )
 
 
 def test_coder_agent_repairs_invalid_output():
-    fake_llm = RepairingCoderLLM()
+    fake_llm = (
+        RepairingCoderLLM()
+    )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
         llm_client=fake_llm
@@ -439,29 +657,42 @@ def test_coder_agent_repairs_invalid_output():
         state,
     )
 
-    assert fake_llm.calls == 2
+    assert (
+        fake_llm.calls
+        == 2
+    )
 
     assert (
-        artifact.metadata["validation_attempts"]
+        artifact.metadata[
+            "validation_attempts"
+        ]
         == 2
     )
 
     assert len(
-        artifact.content["files"]
+        artifact.content[
+            "files"
+        ]
     ) > 0
 
 
 def test_coder_agent_rejects_directory_traversal():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
-        llm_client=PathTraversalCoderLLM(),
+        llm_client=(
+            PathTraversalCoderLLM()
+        ),
         max_validation_retries=0,
     )
 
     with pytest.raises(
         CodeGenerationError,
-        match="Parent directory traversal",
+        match=(
+            "Parent directory traversal"
+        ),
     ):
         agent.execute(
             task,
@@ -470,10 +701,14 @@ def test_coder_agent_rejects_directory_traversal():
 
 
 def test_coder_agent_rejects_absolute_paths():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
-        llm_client=AbsolutePathCoderLLM(),
+        llm_client=(
+            AbsolutePathCoderLLM()
+        ),
         max_validation_retries=0,
     )
 
@@ -488,16 +723,23 @@ def test_coder_agent_rejects_absolute_paths():
 
 
 def test_coder_agent_rejects_duplicate_paths():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
-        llm_client=DuplicatePathCoderLLM(),
+        llm_client=(
+            DuplicatePathCoderLLM()
+        ),
         max_validation_retries=0,
     )
 
     with pytest.raises(
         CodeGenerationError,
-        match="Duplicate generated file path",
+        match=(
+            "Duplicate generated "
+            "file path"
+        ),
     ):
         agent.execute(
             task,
@@ -506,10 +748,14 @@ def test_coder_agent_rejects_duplicate_paths():
 
 
 def test_coder_agent_fails_after_retry_limit():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = CoderAgent(
-        llm_client=AlwaysInvalidCoderLLM(),
+        llm_client=(
+            AlwaysInvalidCoderLLM()
+        ),
         max_validation_retries=1,
     )
 
@@ -524,24 +770,63 @@ def test_coder_agent_fails_after_retry_limit():
 
 def test_coder_agent_fails_without_architecture():
     state = NexusState(
-        user_request="Build an application"
+        user_request=(
+            "Build an application"
+        )
     )
 
     task = AgentTask(
         title="Implement solution",
         description="Generate code.",
-        assigned_agent=AgentRole.CODER,
+        assigned_agent=(
+            AgentRole.CODER
+        ),
     )
 
     agent = CoderAgent(
-        llm_client=FakeCoderLLM()
+        llm_client=(
+            FakeCoderLLM()
+        )
     )
 
     with pytest.raises(
         CodeGenerationError,
-        match="Architecture artifact not found",
+        match=(
+            "Architecture artifact "
+            "not found"
+        ),
     ):
         agent.execute(
             task,
             state,
         )
+
+
+def test_coder_uses_completion_budget():
+    state, task = (
+        build_state_and_task()
+    )
+
+    fake_llm = (
+        TokenCapturingCoderLLM()
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm,
+        max_tokens=3500,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.type
+        == ArtifactType.CODE
+    )
+
+    assert (
+        fake_llm.max_tokens
+        == 3500
+    )

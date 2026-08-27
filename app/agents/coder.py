@@ -19,11 +19,17 @@ from app.core.state import NexusState
 
 
 class GeneratedFile(BaseModel):
-    path: str = Field(min_length=1)
+    path: str = Field(
+        min_length=1
+    )
 
-    content: str = Field(min_length=1)
+    content: str = Field(
+        min_length=1
+    )
 
-    purpose: str = Field(min_length=1)
+    purpose: str = Field(
+        min_length=1
+    )
 
 
 class CodeBundle(BaseModel):
@@ -57,7 +63,10 @@ class CodeBundle(BaseModel):
 
 
 class CodeGenerationError(Exception):
-    """Raised when generated code cannot be validated."""
+    """
+    Raised when generated code
+    cannot be validated.
+    """
 
 
 class CoderAgent(BaseAgent):
@@ -65,13 +74,23 @@ class CoderAgent(BaseAgent):
 
     def __init__(
         self,
-        llm_client: Optional[LLMClient] = None,
+        llm_client: Optional[
+            LLMClient
+        ] = None,
         max_validation_retries: int = 2,
+        max_tokens: int = 3500,
     ):
-        self.llm = llm_client or LLMClient()
+        self.llm = (
+            llm_client
+            or LLMClient()
+        )
 
         self.max_validation_retries = (
             max_validation_retries
+        )
+
+        self.max_tokens = (
+            max_tokens
         )
 
     def _get_architecture(
@@ -79,9 +98,13 @@ class CoderAgent(BaseAgent):
         task: AgentTask,
         state: NexusState,
     ) -> dict:
-        for artifact_id in task.input_artifact_ids:
-            artifact = state.artifacts.get(
-                artifact_id
+        for artifact_id in (
+            task.input_artifact_ids
+        ):
+            artifact = (
+                state.artifacts.get(
+                    artifact_id
+                )
             )
 
             if (
@@ -89,17 +112,24 @@ class CoderAgent(BaseAgent):
                 and artifact.type
                 == ArtifactType.ARCHITECTURE
             ):
-                return artifact.content
+                return (
+                    artifact.content
+                )
 
-        for artifact in state.artifacts.values():
+        for artifact in (
+            state.artifacts.values()
+        ):
             if (
                 artifact.type
                 == ArtifactType.ARCHITECTURE
             ):
-                return artifact.content
+                return (
+                    artifact.content
+                )
 
         raise CodeGenerationError(
-            "Architecture artifact not found."
+            "Architecture artifact "
+            "not found."
         )
 
     def _get_optional_artifact(
@@ -107,9 +137,16 @@ class CoderAgent(BaseAgent):
         state: NexusState,
         artifact_type: ArtifactType,
     ) -> Optional[dict]:
-        for artifact in state.artifacts.values():
-            if artifact.type == artifact_type:
-                return artifact.content
+        for artifact in (
+            state.artifacts.values()
+        ):
+            if (
+                artifact.type
+                == artifact_type
+            ):
+                return (
+                    artifact.content
+                )
 
         return None
 
@@ -121,8 +158,10 @@ class CoderAgent(BaseAgent):
             raw_output
         )
 
-        return CodeBundle.model_validate(
-            parsed
+        return (
+            CodeBundle.model_validate(
+                parsed
+            )
         )
 
     def _validate_file_paths(
@@ -131,52 +170,85 @@ class CoderAgent(BaseAgent):
     ) -> None:
         seen_paths = set()
 
-        for generated_file in bundle.files:
-            path = generated_file.path
+        for generated_file in (
+            bundle.files
+        ):
+            path = (
+                generated_file.path
+            )
 
-            if path.startswith("/"):
-                raise CodeGenerationError(
-                    f"Absolute file path is not allowed: {path}"
+            if path.startswith(
+                "/"
+            ):
+                raise (
+                    CodeGenerationError(
+                        "Absolute file path "
+                        "is not allowed: "
+                        f"{path}"
+                    )
                 )
 
-            if ".." in path.split("/"):
-                raise CodeGenerationError(
-                    f"Parent directory traversal is not allowed: {path}"
+            if (
+                ".."
+                in path.split("/")
+            ):
+                raise (
+                    CodeGenerationError(
+                        "Parent directory "
+                        "traversal is not "
+                        "allowed: "
+                        f"{path}"
+                    )
                 )
 
             if path in seen_paths:
-                raise CodeGenerationError(
-                    f"Duplicate generated file path: {path}"
+                raise (
+                    CodeGenerationError(
+                        "Duplicate generated "
+                        "file path: "
+                        f"{path}"
+                    )
                 )
 
-            seen_paths.add(path)
+            seen_paths.add(
+                path
+            )
 
     def execute(
         self,
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-        architecture = self._get_architecture(
-            task,
-            state,
+        architecture = (
+            self._get_architecture(
+                task,
+                state,
+            )
         )
 
-        requirements = self._get_optional_artifact(
-            state,
-            ArtifactType.REQUIREMENTS,
+        requirements = (
+            self._get_optional_artifact(
+                state,
+                ArtifactType.REQUIREMENTS,
+            )
         )
 
-        research = self._get_optional_artifact(
-            state,
-            ArtifactType.RESEARCH,
+        research = (
+            self._get_optional_artifact(
+                state,
+                ArtifactType.RESEARCH,
+            )
         )
 
         system_prompt = (
-            "You are the Coder Agent inside NEXUS, "
-            "an autonomous AI software engineering system. "
-            "Generate coherent, runnable, modular software "
+            "You are the Coder Agent "
+            "inside NEXUS, an autonomous "
+            "AI software engineering "
+            "system. Generate coherent, "
+            "runnable, modular software "
             "from validated architecture. "
-            "Return machine-valid JSON only."
+            "Return machine-valid JSON "
+            "only."
         )
 
         prompt = f"""
@@ -186,15 +258,24 @@ USER REQUEST:
 
 VALIDATED REQUIREMENTS:
 
-{json.dumps(requirements, indent=2)}
+{json.dumps(
+    requirements,
+    indent=2,
+)}
 
 TECHNICAL RESEARCH:
 
-{json.dumps(research, indent=2)}
+{json.dumps(
+    research,
+    indent=2,
+)}
 
 VALIDATED ARCHITECTURE:
 
-{json.dumps(architecture, indent=2)}
+{json.dumps(
+    architecture,
+    indent=2,
+)}
 
 Generate an initial runnable implementation.
 
@@ -237,23 +318,42 @@ Rules:
 - use environment variables for secrets
 - every field is mandatory and non-empty
 - do not wrap source code in markdown fences
+- keep the implementation compact and demo-ready
+- generate only the minimum files required for a runnable implementation
+- prefer 3 to 5 generated files
+- avoid verbose comments and documentation inside generated source files
+- keep implementation_notes concise
+- keep summary concise
+- do not generate README files
+- do not duplicate information between files or notes
+- prioritize runnable code over explanatory text
 - return JSON only
 """
 
         last_error = None
 
         for attempt in range(
-            self.max_validation_retries + 1
+            self.max_validation_retries
+            + 1
         ):
-            raw_output = self.llm.generate(
-                system_prompt=system_prompt,
-                user_prompt=prompt,
-                json_mode=True,
+            raw_output = (
+                self.llm.generate(
+                    system_prompt=(
+                        system_prompt
+                    ),
+                    user_prompt=prompt,
+                    json_mode=True,
+                    max_tokens=(
+                        self.max_tokens
+                    ),
+                )
             )
 
             try:
-                bundle = self._validate_output(
-                    raw_output
+                bundle = (
+                    self._validate_output(
+                        raw_output
+                    )
                 )
 
                 self._validate_file_paths(
@@ -262,20 +362,32 @@ Rules:
 
                 return Artifact(
                     type=ArtifactType.CODE,
-                    name="generated_code_bundle",
-                    content=bundle.model_dump(),
+                    name=(
+                        "generated_code_bundle"
+                    ),
+                    content=(
+                        bundle.model_dump()
+                    ),
                     created_by=self.role,
                     metadata={
                         "validation_attempts":
                             attempt + 1,
+
                         "file_count":
-                            len(bundle.files),
+                            len(
+                                bundle.files
+                            ),
+
                         "grounded_in_architecture":
                             True,
+
                         "requirements_available":
-                            requirements is not None,
+                            requirements
+                            is not None,
+
                         "research_available":
-                            research is not None,
+                            research
+                            is not None,
                     },
                 )
 
@@ -287,7 +399,8 @@ Rules:
                 last_error = exc
 
                 prompt = f"""
-The previous generated implementation failed validation.
+The previous generated implementation
+failed validation.
 
 ERROR:
 
@@ -297,9 +410,17 @@ PREVIOUS RESPONSE:
 
 {raw_output}
 
+CURRENT ARCHITECTURE:
+
+{json.dumps(
+    architecture,
+    indent=2,
+)}
+
 Repair the implementation.
 
-Return exactly one complete JSON object containing:
+Return exactly one complete JSON object
+containing:
 
 project_name
 summary
@@ -323,10 +444,18 @@ Rules:
 - duplicate file paths are forbidden
 - code must remain consistent with the supplied architecture
 - do not include secrets
+- keep the repaired implementation compact
+- preserve only files required for a runnable solution
+- prefer 3 to 5 generated files
+- avoid verbose comments and documentation
+- keep summary and implementation_notes concise
+- do not generate README files
+- do not wrap source code in markdown fences
 - return JSON only
 """
 
         raise CodeGenerationError(
-            "Code generation could not be validated "
-            f"after retries: {last_error}"
+            "Code generation could not "
+            "be validated after retries: "
+            f"{last_error}"
         )
