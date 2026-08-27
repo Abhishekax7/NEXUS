@@ -11,6 +11,16 @@ from app.agents.research import ResearchAgent
 from app.agents.security import SecurityAgent
 from app.agents.tester import TesterAgent
 
+from app.approval.gate import (
+    ApprovalGate,
+)
+from app.approval.manager import (
+    ApprovalManager,
+)
+from app.approval.policy import (
+    ApprovalPolicy,
+)
+
 from app.core.engine import NexusEngine
 from app.core.models import AgentRole
 from app.core.plan_mutator import PlanMutator
@@ -79,11 +89,6 @@ def build_default_registry(
         ToolRuntime
     ] = None,
 ) -> AgentRegistry:
-    """
-    Build the production NEXUS
-    agent registry.
-    """
-
     registry = AgentRegistry()
 
     registry.register(
@@ -139,10 +144,6 @@ def build_memory_manager(
         DEFAULT_MEMORY_DB_PATH
     ),
 ) -> MemoryManager:
-    """
-    Build persistent NEXUS memory.
-    """
-
     store = MemoryStore(
         db_path=memory_db_path
     )
@@ -155,11 +156,6 @@ def build_memory_manager(
 def build_memory_retriever(
     memory_manager: MemoryManager,
 ) -> MemoryRetriever:
-    """
-    Build retrieval over the same
-    persistent memory store.
-    """
-
     return MemoryRetriever(
         store=memory_manager.store
     )
@@ -179,32 +175,21 @@ def build_repair_loop(
         MemoryRetriever
     ] = None,
 ) -> RepairLoop:
-    """
-    Build the autonomous
-    test-debug-patch-retest subsystem.
-    """
-
     workspace_writer = WorkspaceWriter(
         root=workspace_root
     )
 
     executor = CommandExecutor(
-        timeout_seconds=(
-            command_timeout
-        )
+        timeout_seconds=command_timeout
     )
 
     tester = TesterAgent(
-        workspace_writer=(
-            workspace_writer
-        ),
+        workspace_writer=workspace_writer,
         executor=executor,
     )
 
     debugger = DebuggerAgent(
-        memory_retriever=(
-            memory_retriever
-        )
+        memory_retriever=memory_retriever
     )
 
     patcher = PatchApplicator(
@@ -220,19 +205,33 @@ def build_repair_loop(
 
 
 def build_replanner() -> ReplannerAgent:
-    """
-    Build the dynamic workflow replanner.
-    """
-
     return ReplannerAgent()
 
 
 def build_plan_mutator() -> PlanMutator:
-    """
-    Build deterministic DAG mutation.
-    """
-
     return PlanMutator()
+
+
+def build_approval_manager(
+    require_medium_risk_approval: bool = False,
+) -> ApprovalManager:
+    policy = ApprovalPolicy(
+        require_medium_risk_approval=(
+            require_medium_risk_approval
+        )
+    )
+
+    return ApprovalManager(
+        policy=policy
+    )
+
+
+def build_approval_gate(
+    approval_manager: ApprovalManager,
+) -> ApprovalGate:
+    return ApprovalGate(
+        manager=approval_manager
+    )
 
 
 def build_tool_registry(
@@ -243,27 +242,18 @@ def build_tool_registry(
         MemoryRetriever
     ] = None,
 ) -> ToolRegistry:
-    """
-    Build the production allow-listed
-    tool registry.
-    """
-
     return build_production_tool_registry(
         workspace_root=workspace_root,
-        memory_retriever=(
-            memory_retriever
-        ),
+        memory_retriever=memory_retriever,
     )
 
 
 def build_tool_runtime(
     tool_registry: ToolRegistry,
+    approval_gate: Optional[
+        ApprovalGate
+    ] = None,
 ) -> ToolRuntime:
-    """
-    Build AI tool selection plus
-    validated tool execution.
-    """
-
     selector = ToolSelector(
         registry=tool_registry
     )
@@ -275,6 +265,7 @@ def build_tool_runtime(
     return ToolRuntime(
         selector=selector,
         executor=executor,
+        approval_gate=approval_gate,
     )
 
 
@@ -284,11 +275,6 @@ def build_evaluation_service(
     ),
     auto_create_baseline: bool = True,
 ) -> EvaluationService:
-    """
-    Build the deterministic production
-    evaluation and benchmarking pipeline.
-    """
-
     evaluation_engine = (
         EvaluationEngine()
     )
@@ -322,11 +308,6 @@ def build_observability_service(
         DEFAULT_TRACE_DB_PATH
     ),
 ) -> ObservabilityService:
-    """
-    Build persistent execution tracing
-    for NEXUS workflows.
-    """
-
     trace_store = TraceStore(
         db_path=trace_db_path
     )
@@ -364,13 +345,10 @@ def build_nexus_engine(
     enable_tools: bool = True,
     enable_evaluation: bool = True,
     enable_observability: bool = True,
+    enable_approvals: bool = True,
+    require_medium_risk_approval: bool = False,
     auto_create_evaluation_baseline: bool = True,
 ) -> NexusEngine:
-    """
-    Construct the complete production
-    NEXUS runtime.
-    """
-
     # ---------------------------------
     # Persistent memory
     # ---------------------------------
@@ -402,13 +380,9 @@ def build_nexus_engine(
     if enable_self_healing:
         repair_loop = build_repair_loop(
             workspace_root=workspace_root,
-            command_timeout=(
-                command_timeout
-            ),
+            command_timeout=command_timeout,
             max_repairs=max_repairs,
-            memory_retriever=(
-                memory_retriever
-            ),
+            memory_retriever=memory_retriever,
         )
 
     # ---------------------------------
@@ -419,12 +393,29 @@ def build_nexus_engine(
     plan_mutator = None
 
     if enable_replanning:
-        replanner = (
-            build_replanner()
+        replanner = build_replanner()
+        plan_mutator = build_plan_mutator()
+
+    # ---------------------------------
+    # Human approval subsystem
+    # ---------------------------------
+
+    approval_manager = None
+    approval_gate = None
+
+    if enable_approvals:
+        approval_manager = (
+            build_approval_manager(
+                require_medium_risk_approval=(
+                    require_medium_risk_approval
+                )
+            )
         )
 
-        plan_mutator = (
-            build_plan_mutator()
+        approval_gate = (
+            build_approval_gate(
+                approval_manager
+            )
         )
 
     # ---------------------------------
@@ -437,23 +428,20 @@ def build_nexus_engine(
     if enable_tools:
         tool_registry = (
             build_tool_registry(
-                workspace_root=(
-                    workspace_root
-                ),
-                memory_retriever=(
-                    memory_retriever
-                ),
+                workspace_root=workspace_root,
+                memory_retriever=memory_retriever,
             )
         )
 
         tool_runtime = (
             build_tool_runtime(
-                tool_registry
+                tool_registry,
+                approval_gate=approval_gate,
             )
         )
 
     # ---------------------------------
-    # Evaluation + benchmarking
+    # Evaluation
     # ---------------------------------
 
     evaluation_service = None
@@ -471,7 +459,7 @@ def build_nexus_engine(
         )
 
     # ---------------------------------
-    # Observability + execution tracing
+    # Observability
     # ---------------------------------
 
     observability_service = None
@@ -479,33 +467,27 @@ def build_nexus_engine(
     if enable_observability:
         observability_service = (
             build_observability_service(
-                trace_db_path=(
-                    trace_db_path
-                )
+                trace_db_path=trace_db_path
             )
         )
 
     # ---------------------------------
-    # Agent registry
+    # Agents
     # ---------------------------------
 
     registry = build_default_registry(
-        memory_retriever=(
-            memory_retriever
-        ),
+        memory_retriever=memory_retriever,
         tool_runtime=tool_runtime,
     )
 
     # ---------------------------------
-    # Main engine
+    # Engine
     # ---------------------------------
 
     engine = NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
-        memory_manager=(
-            memory_manager
-        ),
+        memory_manager=memory_manager,
         replanner=replanner,
         plan_mutator=plan_mutator,
         max_replans=max_replans,
@@ -523,6 +505,14 @@ def build_nexus_engine(
 
     engine.tool_runtime = (
         tool_runtime
+    )
+
+    engine.approval_manager = (
+        approval_manager
+    )
+
+    engine.approval_gate = (
+        approval_gate
     )
 
     return engine
