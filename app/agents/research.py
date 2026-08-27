@@ -490,11 +490,49 @@ Rules:
             ) as exc:
                 last_error = exc
 
-                prompt = f"""
-The previous research response failed
-validation.
+                required_schema = {
+                    "research_question":
+                        "non-empty string",
 
-ERROR:
+                    "findings": [
+                        "non-empty finding"
+                    ],
+
+                    "recommended_technologies": [
+                        "technology"
+                    ],
+
+                    "tradeoffs": [
+                        "tradeoff"
+                    ],
+
+                    "risks": [
+                        "risk"
+                    ],
+
+                    "sources": [
+                        {
+                            "title":
+                                "source title",
+
+                            "url":
+                                "URL copied exactly "
+                                "from WEB SEARCH "
+                                "RESULTS",
+
+                            "summary":
+                                "short technical "
+                                "summary of the "
+                                "source",
+                        }
+                    ],
+                }
+
+                prompt = f"""
+The previous Research Agent response
+failed structured-output validation.
+
+VALIDATION ERROR:
 
 {exc}
 
@@ -502,22 +540,71 @@ PREVIOUS RESPONSE:
 
 {raw_output}
 
-Repair the response.
-
-You must return all required fields.
-
-Every cited URL MUST come from this list:
+ORIGINAL WEB SEARCH RESULTS:
 
 {json.dumps(
-    list(
-        {
-            item["url"]
-            for item
-            in source_context
-        }
-    ),
+    source_context,
     indent=2,
 )}
+
+REQUIRED JSON SHAPE:
+
+{json.dumps(
+    required_schema,
+    indent=2,
+)}
+
+Repair the previous response.
+
+STRICT RULES:
+
+- Return exactly one JSON object.
+
+- Do not return markdown.
+
+- Preserve useful information from the
+  previous response when it is valid.
+
+- research_question must be a non-empty
+  string.
+
+- findings must be a non-empty array of
+  strings.
+
+- recommended_technologies must be a
+  non-empty array of strings.
+
+- tradeoffs must be a non-empty array of
+  strings.
+
+- risks must be a non-empty array of
+  strings.
+
+- sources must be a non-empty array of
+  objects.
+
+- EVERY source object MUST contain all
+  three keys:
+  "title"
+  "url"
+  "summary"
+
+- NEVER return a source object containing
+  only "url".
+
+- Copy each source title and URL from
+  ORIGINAL WEB SEARCH RESULTS.
+
+- A source URL MUST exactly match one of
+  the URLs in ORIGINAL WEB SEARCH RESULTS.
+
+- Create the source summary from the
+  corresponding search-result snippet and
+  the technical research.
+
+- Do not invent URLs.
+
+- Do not invent external sources.
 
 Return only valid JSON.
 """

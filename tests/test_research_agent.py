@@ -431,3 +431,221 @@ def test_research_agent_fails_without_requirements():
             task,
             state,
         )
+class UrlOnlyThenRepairedResearchLLM:
+    """
+    Reproduces the real flagship-demo
+    failure where the model initially
+    returns source objects containing
+    only URLs.
+
+    The second response simulates a
+    successful schema-aware repair.
+    """
+
+    def __init__(self):
+        self.calls = 0
+        self.repair_prompt = None
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+    ) -> str:
+        self.calls += 1
+
+        if self.calls == 1:
+            return json.dumps(
+                {
+                    "research_question":
+                        "Research system architecture",
+
+                    "findings": [
+                        "FastAPI is suitable "
+                        "for the API layer."
+                    ],
+
+                    "recommended_technologies": [
+                        "FastAPI",
+                        "Python",
+                    ],
+
+                    "tradeoffs": [
+                        "Framework abstractions "
+                        "simplify development but "
+                        "add dependencies."
+                    ],
+
+                    "risks": [
+                        "Incorrect API validation "
+                        "can expose invalid state."
+                    ],
+
+                    "sources": [
+                        {
+                            "url":
+                                "https://fastapi.tiangolo.com/"
+                        },
+                        {
+                            "url":
+                                "https://faiss.ai/"
+                        },
+                    ],
+                }
+            )
+
+        self.repair_prompt = (
+            user_prompt
+        )
+
+        return json.dumps(
+            {
+                "research_question":
+                    "Research system architecture",
+
+                "findings": [
+                    "FastAPI is suitable "
+                    "for the API layer."
+                ],
+
+                "recommended_technologies": [
+                    "FastAPI",
+                    "Python",
+                ],
+
+                "tradeoffs": [
+                    "Framework abstractions "
+                    "simplify development but "
+                    "add dependencies."
+                ],
+
+                "risks": [
+                    "Incorrect API validation "
+                    "can expose invalid state."
+                ],
+
+                "sources": [
+                    {
+                        "title":
+                            "FastAPI Documentation",
+
+                        "url":
+                            "https://fastapi.tiangolo.com/",
+
+                        "summary":
+                            "Official FastAPI "
+                            "documentation for "
+                            "building Python APIs.",
+                    },
+                    {
+                        "title":
+                            "FAISS Documentation",
+
+                        "url":
+                            "https://faiss.ai/",
+
+                        "summary":
+                            "Documentation for "
+                            "efficient vector "
+                            "similarity search.",
+                    },
+                ],
+            }
+        )
+
+
+def test_research_agent_repairs_url_only_sources():
+    fake_llm = (
+        UrlOnlyThenRepairedResearchLLM()
+    )
+
+    state = NexusState(
+        user_request=(
+            "Build a RAG application"
+        )
+    )
+
+    requirements = (
+        create_requirements_artifact()
+    )
+
+    state.add_artifact(
+        requirements
+    )
+
+    task = create_research_task(
+        requirements.id
+    )
+
+    agent = ResearchAgent(
+        llm_client=fake_llm,
+        search_tool=FakeSearchTool(),
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.calls == 2
+
+    assert (
+        artifact.metadata[
+            "validation_attempts"
+        ]
+        == 2
+    )
+
+    sources = (
+        artifact.content[
+            "sources"
+        ]
+    )
+
+    assert len(sources) == 2
+
+    for source in sources:
+        assert source["title"]
+        assert source["url"]
+        assert source["summary"]
+
+    allowed_urls = {
+        "https://fastapi.tiangolo.com/",
+        "https://faiss.ai/",
+    }
+
+    for source in sources:
+        assert (
+            source["url"]
+            in allowed_urls
+        )
+
+    assert (
+        fake_llm.repair_prompt
+        is not None
+    )
+
+    assert (
+        "ORIGINAL WEB SEARCH RESULTS"
+        in fake_llm.repair_prompt
+    )
+
+    assert (
+        '"title"'
+        in fake_llm.repair_prompt
+    )
+
+    assert (
+        '"url"'
+        in fake_llm.repair_prompt
+    )
+
+    assert (
+        '"summary"'
+        in fake_llm.repair_prompt
+    )
+
+    assert (
+        "NEVER return a source object"
+        in fake_llm.repair_prompt
+    )
