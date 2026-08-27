@@ -67,16 +67,71 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> NexusState:
+        """
+        Register an in-memory workflow
+        state with the control plane.
+        """
+
         self._runs[
             state.run_id
         ] = state
 
         return state
 
+    def create_run(
+        self,
+        *,
+        user_request: str,
+        metadata: Optional[
+            dict
+        ] = None,
+    ) -> RunResponse:
+        """
+        Create and register a new NEXUS
+        workflow state.
+
+        The initial state is checkpointed
+        when checkpointing is configured.
+        """
+
+        state = NexusState(
+            user_request=user_request
+        )
+
+        if metadata:
+            state.metadata.update(
+                metadata
+            )
+
+        self.register_state(
+            state
+        )
+
+        if (
+            self.engine.checkpoint_service
+            is not None
+        ):
+            (
+                self.engine
+                .checkpoint_service
+                .workflow_started(
+                    state
+                )
+            )
+
+        return self.run_response(
+            state
+        )
+
     def get_state(
         self,
         run_id: str,
     ) -> NexusState:
+        """
+        Resolve a run from memory or
+        persistent checkpoint storage.
+        """
+
         state = self._runs.get(
             run_id
         )
@@ -112,6 +167,11 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> RunStatus:
+        """
+        Convert internal workflow state
+        into the public API run status.
+        """
+
         if state.completed:
             return (
                 RunStatus.COMPLETED
@@ -151,6 +211,11 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> RunResponse:
+        """
+        Build the public representation
+        of a workflow run.
+        """
+
         return RunResponse(
             run_id=state.run_id,
             status=(
@@ -179,6 +244,11 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> RunSummaryResponse:
+        """
+        Return task and artifact counts
+        for a workflow.
+        """
+
         state = self.get_state(
             run_id
         )
@@ -231,6 +301,11 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> RecoveryResponse:
+        """
+        Return checkpoint recovery
+        information for a workflow.
+        """
+
         if (
             self.engine.checkpoint_service
             is None
@@ -276,6 +351,11 @@ class NexusControlPlane:
         *,
         allow_failed: bool = False,
     ) -> NexusState:
+        """
+        Restore a persisted workflow
+        without executing it.
+        """
+
         state = self.engine.restore_run(
             run_id,
             allow_failed=allow_failed,
@@ -293,6 +373,11 @@ class NexusControlPlane:
         *,
         allow_failed: bool = False,
     ) -> ResumeRunResponse:
+        """
+        Restore and continue execution
+        of a persisted workflow.
+        """
+
         state = self.engine.resume_run(
             run_id,
             allow_failed=allow_failed,
@@ -321,6 +406,11 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> TraceResponse:
+        """
+        Return the observability summary
+        for a workflow.
+        """
+
         service = (
             self.engine
             .observability_service
@@ -378,6 +468,11 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> EvaluationResponse:
+        """
+        Return evaluation and benchmark
+        information for a workflow.
+        """
+
         service = (
             self.engine
             .evaluation_service
@@ -451,6 +546,11 @@ class NexusControlPlane:
     ) -> list[
         ApprovalResponse
     ]:
+        """
+        Return all currently pending
+        human approval requests.
+        """
+
         manager = (
             self.engine
             .approval_manager
@@ -506,6 +606,11 @@ class NexusControlPlane:
             dict
         ] = None,
     ) -> ApprovalResponse:
+        """
+        Approve a pending human approval
+        request.
+        """
+
         manager = (
             self.engine
             .approval_manager
@@ -556,6 +661,11 @@ class NexusControlPlane:
             dict
         ] = None,
     ) -> ApprovalResponse:
+        """
+        Reject a pending human approval
+        request.
+        """
+
         manager = (
             self.engine
             .approval_manager

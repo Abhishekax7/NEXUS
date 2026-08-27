@@ -11,6 +11,7 @@ from app.api.control_plane import (
 from app.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalResponse,
+    CreateRunRequest,
     EvaluationResponse,
     HealthResponse,
     RecoveryResponse,
@@ -44,6 +45,32 @@ def create_app(
     )
     def health():
         return HealthResponse()
+
+    @app.post(
+        "/runs",
+        response_model=RunResponse,
+        status_code=201,
+    )
+    def create_run(
+        request: CreateRunRequest,
+    ):
+        try:
+            return (
+                control_plane.create_run(
+                    user_request=(
+                        request.user_request
+                    ),
+                    metadata=(
+                        request.metadata
+                    ),
+                )
+            )
+
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
 
     @app.get(
         "/runs/{run_id}",
@@ -161,8 +188,10 @@ def create_app(
         run_id: str,
     ):
         try:
-            return control_plane.trace(
-                run_id
+            return (
+                control_plane.trace(
+                    run_id
+                )
             )
 
         except RunNotFoundError as exc:
@@ -231,13 +260,17 @@ def create_app(
         request: ApprovalDecisionRequest,
     ):
         try:
-            return control_plane.approve(
-                request_id,
-                reason=request.reason,
-                decided_by=(
-                    request.decided_by
-                ),
-                metadata=request.metadata,
+            return (
+                control_plane.approve(
+                    request_id,
+                    reason=request.reason,
+                    decided_by=(
+                        request.decided_by
+                    ),
+                    metadata=(
+                        request.metadata
+                    ),
+                )
             )
 
         except Exception as exc:
@@ -255,13 +288,17 @@ def create_app(
         request: ApprovalDecisionRequest,
     ):
         try:
-            return control_plane.reject(
-                request_id,
-                reason=request.reason,
-                decided_by=(
-                    request.decided_by
-                ),
-                metadata=request.metadata,
+            return (
+                control_plane.reject(
+                    request_id,
+                    reason=request.reason,
+                    decided_by=(
+                        request.decided_by
+                    ),
+                    metadata=(
+                        request.metadata
+                    ),
+                )
             )
 
         except Exception as exc:
