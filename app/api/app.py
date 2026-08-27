@@ -14,22 +14,26 @@ from app.api.schemas import (
     CreateRunRequest,
     EvaluationResponse,
     HealthResponse,
+    JobExecutionResponse,
+    JobListResponse,
+    JobResponse,
     RecoveryResponse,
     ResumeRunRequest,
     ResumeRunResponse,
     RunResponse,
     RunSummaryResponse,
+    SubmitJobRequest,
     TraceResponse,
+)
+
+from app.jobs.models import (
+    JobNotFoundError,
 )
 
 
 def create_app(
     control_plane: NexusControlPlane,
 ) -> FastAPI:
-    """
-    Build the NEXUS HTTP control-plane API.
-    """
-
     app = FastAPI(
         title="NEXUS Control Plane",
         version="1.0.0",
@@ -55,15 +59,11 @@ def create_app(
         request: CreateRunRequest,
     ):
         try:
-            return (
-                control_plane.create_run(
-                    user_request=(
-                        request.user_request
-                    ),
-                    metadata=(
-                        request.metadata
-                    ),
-                )
+            return control_plane.create_run(
+                user_request=(
+                    request.user_request
+                ),
+                metadata=request.metadata,
             )
 
         except ControlPlaneError as exc:
@@ -300,6 +300,205 @@ def create_app(
                     ),
                 )
             )
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/jobs",
+        response_model=JobResponse,
+        status_code=201,
+    )
+    def submit_job(
+        request: SubmitJobRequest,
+    ):
+        try:
+            return (
+                control_plane.submit_job(
+                    request.run_id,
+                    priority=(
+                        request.priority
+                    ),
+                    max_attempts=(
+                        request.max_attempts
+                    ),
+                    metadata=(
+                        request.metadata
+                    ),
+                )
+            )
+
+        except RunNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.get(
+        "/jobs",
+        response_model=JobListResponse,
+    )
+    def list_jobs():
+        try:
+            jobs = (
+                control_plane
+                .pending_jobs()
+            )
+
+            return JobListResponse(
+                count=len(
+                    jobs
+                ),
+                jobs=jobs,
+            )
+
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.get(
+        "/jobs/{job_id}",
+        response_model=JobResponse,
+    )
+    def get_job(
+        job_id: str,
+    ):
+        try:
+            return (
+                control_plane.get_job(
+                    job_id
+                )
+            )
+
+        except JobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/jobs/execute-next",
+        response_model=(
+            JobExecutionResponse
+        ),
+    )
+    def execute_next_job():
+        try:
+            result = (
+                control_plane
+                .execute_next_job()
+            )
+
+            if result is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "No queued jobs "
+                        "are available."
+                    ),
+                )
+
+            return result
+
+        except HTTPException:
+            raise
+
+        except ControlPlaneError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/jobs/{job_id}/execute",
+        response_model=(
+            JobExecutionResponse
+        ),
+    )
+    def execute_job(
+        job_id: str,
+    ):
+        try:
+            return (
+                control_plane.execute_job(
+                    job_id
+                )
+            )
+
+        except JobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/jobs/{job_id}/cancel",
+        response_model=JobResponse,
+    )
+    def cancel_job(
+        job_id: str,
+    ):
+        try:
+            return (
+                control_plane.cancel_job(
+                    job_id
+                )
+            )
+
+        except JobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/jobs/{job_id}/retry",
+        response_model=JobResponse,
+    )
+    def retry_job(
+        job_id: str,
+    ):
+        try:
+            return (
+                control_plane.retry_job(
+                    job_id
+                )
+            )
+
+        except JobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
 
         except Exception as exc:
             raise HTTPException(

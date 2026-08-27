@@ -25,6 +25,15 @@ from app.core.state import (
     NexusState,
 )
 
+from app.jobs.manager import (
+    JobManager,
+)
+from app.jobs.models import (
+    JobExecutionResult,
+    JobPriority,
+    JobSnapshot,
+)
+
 
 class ControlPlaneError(Exception):
     """
@@ -45,18 +54,30 @@ class RunNotFoundError(
 class NexusControlPlane:
     """
     Application-service layer between
-    the HTTP API and NexusEngine.
+    FastAPI and the NEXUS runtime.
 
-    The control plane exposes stable
-    operations without leaking engine
-    implementation details to routes.
+    Responsibilities:
+    - workflow run creation
+    - run inspection
+    - recovery/resume
+    - observability
+    - evaluation
+    - approvals
+    - asynchronous job execution
     """
 
     def __init__(
         self,
         engine: NexusEngine,
+        job_manager: Optional[
+            JobManager
+        ] = None,
     ):
         self.engine = engine
+
+        self.job_manager = (
+            job_manager
+        )
 
         self._runs: dict[
             str,
@@ -67,11 +88,6 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> NexusState:
-        """
-        Register an in-memory workflow
-        state with the control plane.
-        """
-
         self._runs[
             state.run_id
         ] = state
@@ -87,11 +103,8 @@ class NexusControlPlane:
         ] = None,
     ) -> RunResponse:
         """
-        Create and register a new NEXUS
-        workflow state.
-
-        The initial state is checkpointed
-        when checkpointing is configured.
+        Create and register a new
+        NEXUS workflow state.
         """
 
         state = NexusState(
@@ -127,11 +140,6 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> NexusState:
-        """
-        Resolve a run from memory or
-        persistent checkpoint storage.
-        """
-
         state = self._runs.get(
             run_id
         )
@@ -167,11 +175,6 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> RunStatus:
-        """
-        Convert internal workflow state
-        into the public API run status.
-        """
-
         if state.completed:
             return (
                 RunStatus.COMPLETED
@@ -193,8 +196,7 @@ class NexusControlPlane:
 
                 if (
                     recovery.status
-                    == RecoveryStatus
-                    .RECOVERABLE
+                    == RecoveryStatus.RECOVERABLE
                 ):
                     return (
                         RunStatus.RECOVERABLE
@@ -211,11 +213,6 @@ class NexusControlPlane:
         self,
         state: NexusState,
     ) -> RunResponse:
-        """
-        Build the public representation
-        of a workflow run.
-        """
-
         return RunResponse(
             run_id=state.run_id,
             status=(
@@ -244,11 +241,6 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> RunSummaryResponse:
-        """
-        Return task and artifact counts
-        for a workflow.
-        """
-
         state = self.get_state(
             run_id
         )
@@ -301,11 +293,6 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> RecoveryResponse:
-        """
-        Return checkpoint recovery
-        information for a workflow.
-        """
-
         if (
             self.engine.checkpoint_service
             is None
@@ -351,14 +338,11 @@ class NexusControlPlane:
         *,
         allow_failed: bool = False,
     ) -> NexusState:
-        """
-        Restore a persisted workflow
-        without executing it.
-        """
-
-        state = self.engine.restore_run(
-            run_id,
-            allow_failed=allow_failed,
+        state = (
+            self.engine.restore_run(
+                run_id,
+                allow_failed=allow_failed,
+            )
         )
 
         self.register_state(
@@ -373,14 +357,11 @@ class NexusControlPlane:
         *,
         allow_failed: bool = False,
     ) -> ResumeRunResponse:
-        """
-        Restore and continue execution
-        of a persisted workflow.
-        """
-
-        state = self.engine.resume_run(
-            run_id,
-            allow_failed=allow_failed,
+        state = (
+            self.engine.resume_run(
+                run_id,
+                allow_failed=allow_failed,
+            )
         )
 
         self.register_state(
@@ -406,11 +387,6 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> TraceResponse:
-        """
-        Return the observability summary
-        for a workflow.
-        """
-
         service = (
             self.engine
             .observability_service
@@ -468,11 +444,6 @@ class NexusControlPlane:
         self,
         run_id: str,
     ) -> EvaluationResponse:
-        """
-        Return evaluation and benchmark
-        information for a workflow.
-        """
-
         service = (
             self.engine
             .evaluation_service
@@ -496,7 +467,9 @@ class NexusControlPlane:
                 f"for run: {run_id}"
             )
 
-        baseline = service.get_baseline()
+        baseline = (
+            service.get_baseline()
+        )
 
         regression_detected = None
 
@@ -546,11 +519,6 @@ class NexusControlPlane:
     ) -> list[
         ApprovalResponse
     ]:
-        """
-        Return all currently pending
-        human approval requests.
-        """
-
         manager = (
             self.engine
             .approval_manager
@@ -606,11 +574,6 @@ class NexusControlPlane:
             dict
         ] = None,
     ) -> ApprovalResponse:
-        """
-        Approve a pending human approval
-        request.
-        """
-
         manager = (
             self.engine
             .approval_manager
@@ -661,11 +624,6 @@ class NexusControlPlane:
             dict
         ] = None,
     ) -> ApprovalResponse:
-        """
-        Reject a pending human approval
-        request.
-        """
-
         manager = (
             self.engine
             .approval_manager
@@ -704,4 +662,130 @@ class NexusControlPlane:
                 request.proposed_action
             ),
             allowed=result.allowed,
+        )
+
+    def _require_job_manager(
+        self,
+    ) -> JobManager:
+        if self.job_manager is None:
+            raise ControlPlaneError(
+                "Asynchronous job execution "
+                "is not configured."
+            )
+
+        return self.job_manager
+
+    def submit_job(
+        self,
+        run_id: str,
+        *,
+        priority: JobPriority = (
+            JobPriority.NORMAL
+        ),
+        max_attempts: int = 1,
+        metadata: Optional[
+            dict
+        ] = None,
+    ) -> JobSnapshot:
+        manager = (
+            self._require_job_manager()
+        )
+
+        state = self.get_state(
+            run_id
+        )
+
+        job = manager.submit(
+            state,
+            priority=priority,
+            max_attempts=max_attempts,
+            metadata=metadata,
+        )
+
+        return manager.snapshot(
+            job.id
+        )
+
+    def get_job(
+        self,
+        job_id: str,
+    ) -> JobSnapshot:
+        manager = (
+            self._require_job_manager()
+        )
+
+        return manager.snapshot(
+            job_id
+        )
+
+    def pending_jobs(
+        self,
+    ) -> list[
+        JobSnapshot
+    ]:
+        manager = (
+            self._require_job_manager()
+        )
+
+        return [
+            manager.snapshot(
+                job.id
+            )
+            for job
+            in manager.pending_jobs()
+        ]
+
+    def execute_next_job(
+        self,
+    ) -> Optional[
+        JobExecutionResult
+    ]:
+        manager = (
+            self._require_job_manager()
+        )
+
+        return manager.execute_next()
+
+    def execute_job(
+        self,
+        job_id: str,
+    ) -> JobExecutionResult:
+        manager = (
+            self._require_job_manager()
+        )
+
+        return manager.execute_job(
+            job_id
+        )
+
+    def cancel_job(
+        self,
+        job_id: str,
+    ) -> JobSnapshot:
+        manager = (
+            self._require_job_manager()
+        )
+
+        manager.cancel(
+            job_id
+        )
+
+        return manager.snapshot(
+            job_id
+        )
+
+    def retry_job(
+        self,
+        job_id: str,
+    ) -> JobSnapshot:
+        manager = (
+            self._require_job_manager()
+        )
+
+        manager.retry(
+            job_id
+        )
+
+        return manager.snapshot(
+            job_id
         )

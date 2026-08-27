@@ -249,3 +249,80 @@ class HealthResponse(BaseModel):
 
     version: str = "1.0"
 
+from app.jobs.models import (
+    JobPriority,
+    JobStatus,
+)
+
+
+class SubmitJobRequest(
+    BaseModel
+):
+    run_id: str = Field(
+        min_length=1
+    )
+
+    priority: JobPriority = (
+        JobPriority.NORMAL
+    )
+
+    max_attempts: int = Field(
+        default=1,
+        ge=1,
+    )
+
+    metadata: dict = Field(
+        default_factory=dict
+    )
+
+
+class JobResponse(
+    BaseModel
+):
+    job_id: str
+
+    run_id: str
+
+    status: JobStatus
+
+    priority: JobPriority
+
+    attempt: int
+
+    max_attempts: int
+
+    queued: bool
+
+    running: bool
+
+    terminal: bool
+
+
+class JobExecutionResponse(
+    BaseModel
+):
+    job_id: str
+
+    run_id: str
+
+    status: JobStatus
+
+    success: bool
+
+    error: Optional[
+        str
+    ] = None
+
+    metadata: dict = Field(
+        default_factory=dict
+    )
+
+
+class JobListResponse(
+    BaseModel
+):
+    count: int
+
+    jobs: list[
+        JobResponse
+    ]
