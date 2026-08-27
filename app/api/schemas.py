@@ -4,6 +4,7 @@ from typing import Any, Optional
 from pydantic import (
     BaseModel,
     Field,
+    field_validator,
 )
 
 
@@ -275,6 +276,57 @@ class SubmitJobRequest(
         default_factory=dict
     )
 
+    @field_validator(
+        "priority",
+        mode="before",
+    )
+    @classmethod
+    def parse_priority(
+        cls,
+        value,
+    ):
+        """
+        Accept friendly API values such as
+        'low', 'normal', 'high', and
+        'critical' while preserving the
+        internal numeric JobPriority enum.
+        """
+
+        if isinstance(
+            value,
+            JobPriority,
+        ):
+            return value
+
+        if isinstance(
+            value,
+            str,
+        ):
+            normalized = (
+                value
+                .strip()
+                .lower()
+            )
+
+            mapping = {
+                "low":
+                    JobPriority.LOW,
+                "normal":
+                    JobPriority.NORMAL,
+                "high":
+                    JobPriority.HIGH,
+                "critical":
+                    JobPriority.CRITICAL,
+            }
+
+            priority = mapping.get(
+                normalized
+            )
+
+            if priority is not None:
+                return priority
+
+        return value
 
 class JobResponse(
     BaseModel

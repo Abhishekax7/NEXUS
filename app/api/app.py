@@ -43,12 +43,20 @@ def create_app(
         ),
     )
 
+    # ---------------------------------
+    # Health
+    # ---------------------------------
+
     @app.get(
         "/health",
         response_model=HealthResponse,
     )
     def health():
         return HealthResponse()
+
+    # ---------------------------------
+    # Workflow runs
+    # ---------------------------------
 
     @app.post(
         "/runs",
@@ -180,6 +188,10 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    # ---------------------------------
+    # Observability
+    # ---------------------------------
+
     @app.get(
         "/runs/{run_id}/trace",
         response_model=TraceResponse,
@@ -206,6 +218,10 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    # ---------------------------------
+    # Evaluation
+    # ---------------------------------
+
     @app.get(
         "/runs/{run_id}/evaluation",
         response_model=EvaluationResponse,
@@ -231,6 +247,10 @@ def create_app(
                 status_code=400,
                 detail=str(exc),
             ) from exc
+
+    # ---------------------------------
+    # Human approvals
+    # ---------------------------------
 
     @app.get(
         "/approvals",
@@ -307,6 +327,10 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    # ---------------------------------
+    # Asynchronous workflow jobs
+    # ---------------------------------
+
     @app.post(
         "/jobs",
         response_model=JobResponse,
@@ -349,10 +373,44 @@ def create_app(
     )
     def list_jobs():
         try:
-            jobs = (
+            snapshots = (
                 control_plane
                 .pending_jobs()
             )
+
+            jobs = [
+                JobResponse(
+                    job_id=(
+                        snapshot.job_id
+                    ),
+                    run_id=(
+                        snapshot.run_id
+                    ),
+                    status=(
+                        snapshot.status
+                    ),
+                    priority=(
+                        snapshot.priority
+                    ),
+                    attempt=(
+                        snapshot.attempt
+                    ),
+                    max_attempts=(
+                        snapshot.max_attempts
+                    ),
+                    queued=(
+                        snapshot.queued
+                    ),
+                    running=(
+                        snapshot.running
+                    ),
+                    terminal=(
+                        snapshot.terminal
+                    ),
+                )
+                for snapshot
+                in snapshots
+            ]
 
             return JobListResponse(
                 count=len(
