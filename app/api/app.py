@@ -1,6 +1,16 @@
+import json
+
+from typing import (
+    Optional,
+)
+
 from fastapi import (
     FastAPI,
     HTTPException,
+)
+
+from fastapi.responses import (
+    StreamingResponse,
 )
 
 from app.api.control_plane import (
@@ -8,6 +18,7 @@ from app.api.control_plane import (
     NexusControlPlane,
     RunNotFoundError,
 )
+
 from app.api.schemas import (
     ApprovalDecisionRequest,
     ApprovalResponse,
@@ -24,6 +35,10 @@ from app.api.schemas import (
     RunSummaryResponse,
     SubmitJobRequest,
     TraceResponse,
+)
+
+from app.events.models import (
+    EventFilter,
 )
 
 from app.jobs.models import (
@@ -563,5 +578,140 @@ def create_app(
                 status_code=400,
                 detail=str(exc),
             ) from exc
+
+    # ---------------------------------
+    # Event telemetry
+    # ---------------------------------
+
+    @app.get(
+        "/events",
+    )
+    def get_events(
+        run_id: Optional[
+            str
+        ] = None,
+        job_id: Optional[
+            str
+        ] = None,
+        limit: int = 100,
+    ):
+        event_bus = getattr(
+            control_plane.engine,
+            "event_bus",
+            None,
+        )
+
+        if event_bus is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Event streaming is not "
+                    "configured."
+                ),
+            )
+
+        if limit < 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "limit must be >= 1."
+                ),
+            )
+
+        event_filter = EventFilter(
+            run_id=run_id,
+            job_id=job_id,
+        )
+
+        page = event_bus.history(
+            event_filter,
+            limit=limit,
+        )
+
+        return page.model_dump(
+            mode="json"
+        )
+
+    @app.get(
+        "/events/stream",
+    )
+    def stream_events(
+        run_id: Optional[
+            str
+        ] = None,
+        job_id: Optional[
+            str
+        ] = None,
+    ):
+        event_bus = getattr(
+            control_plane.engine,
+            "event_bus",
+            None,
+        )
+
+        if event_bus is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Event streaming is not "
+                    "configured."
+                ),
+            )
+
+        subscription = (
+            event_bus.subscribe(
+                run_id=run_id,
+                job_id=job_id,
+            )
+        )
+
+        def event_generator():
+            try:
+                while True:
+                    event = (
+                        event_bus.get_event(
+                            subscription.id,
+                            timeout=15.0,
+                        )
+                    )
+
+                    if event is None:
+                        yield (
+                            ": keep-alive\n\n"
+                        )
+                        continue
+
+                    payload = json.dumps(
+                        event.model_dump(
+                            mode="json"
+                        )
+                    )
+
+                    yield (
+                        f"event: "
+                        f"{event.type.value}\n"
+                        f"data: {payload}\n\n"
+                    )
+
+            finally:
+                try:
+                    event_bus.unsubscribe(
+                        subscription.id
+                    )
+                except Exception:
+                    pass
+
+        return StreamingResponse(
+            event_generator(),
+            media_type=(
+                "text/event-stream"
+            ),
+            headers={
+                "Cache-Control":
+                    "no-cache",
+                "Connection":
+                    "keep-alive",
+            },
+        )
 
     return app
