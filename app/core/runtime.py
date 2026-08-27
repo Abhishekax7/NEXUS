@@ -33,6 +33,13 @@ from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import MemoryStore
 
+from app.observability.service import (
+    ObservabilityService,
+)
+from app.observability.store import (
+    TraceStore,
+)
+
 from app.tools.executor import CommandExecutor
 from app.tools.executor_runtime import ToolExecutor
 from app.tools.patcher import PatchApplicator
@@ -53,6 +60,10 @@ DEFAULT_MEMORY_DB_PATH = (
 
 DEFAULT_EVALUATION_DB_PATH = (
     "data/nexus_evaluations.db"
+)
+
+DEFAULT_TRACE_DB_PATH = (
+    "data/nexus_traces.db"
 )
 
 DEFAULT_COMMAND_TIMEOUT = 20
@@ -306,6 +317,25 @@ def build_evaluation_service(
     )
 
 
+def build_observability_service(
+    trace_db_path: str = (
+        DEFAULT_TRACE_DB_PATH
+    ),
+) -> ObservabilityService:
+    """
+    Build persistent execution tracing
+    for NEXUS workflows.
+    """
+
+    trace_store = TraceStore(
+        db_path=trace_db_path
+    )
+
+    return ObservabilityService(
+        store=trace_store
+    )
+
+
 def build_nexus_engine(
     workspace_root: str = (
         DEFAULT_WORKSPACE_ROOT
@@ -315,6 +345,9 @@ def build_nexus_engine(
     ),
     evaluation_db_path: str = (
         DEFAULT_EVALUATION_DB_PATH
+    ),
+    trace_db_path: str = (
+        DEFAULT_TRACE_DB_PATH
     ),
     command_timeout: int = (
         DEFAULT_COMMAND_TIMEOUT
@@ -330,6 +363,7 @@ def build_nexus_engine(
     enable_replanning: bool = True,
     enable_tools: bool = True,
     enable_evaluation: bool = True,
+    enable_observability: bool = True,
     auto_create_evaluation_baseline: bool = True,
 ) -> NexusEngine:
     """
@@ -437,6 +471,21 @@ def build_nexus_engine(
         )
 
     # ---------------------------------
+    # Observability + execution tracing
+    # ---------------------------------
+
+    observability_service = None
+
+    if enable_observability:
+        observability_service = (
+            build_observability_service(
+                trace_db_path=(
+                    trace_db_path
+                )
+            )
+        )
+
+    # ---------------------------------
     # Agent registry
     # ---------------------------------
 
@@ -462,6 +511,9 @@ def build_nexus_engine(
         max_replans=max_replans,
         evaluation_service=(
             evaluation_service
+        ),
+        observability_service=(
+            observability_service
         ),
     )
 
