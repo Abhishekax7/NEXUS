@@ -4,9 +4,19 @@ from app.core.state import (
     NexusState,
 )
 
+from app.events.bus import (
+    EventBus,
+)
+from app.events.models import (
+    EventSeverity,
+    EventType,
+    NexusEvent,
+)
+
 from app.governance.models import (
     ResourceUsage,
 )
+
 from app.governance.service import (
     GovernanceService,
 )
@@ -20,9 +30,11 @@ from app.jobs.models import (
     JobStatus,
     WorkflowJob,
 )
+
 from app.jobs.queue import (
     PriorityJobQueue,
 )
+
 from app.jobs.worker import (
     WorkflowWorker,
 )
@@ -34,6 +46,7 @@ class JobManager:
     workflow jobs.
 
     Responsibilities:
+
     - submit jobs
     - track workflow states
     - execute queued work
@@ -41,6 +54,7 @@ class JobManager:
     - cancel queued jobs
     - retry failed jobs
     - enforce workflow governance
+    - publish lifecycle telemetry
     """
 
     def __init__(
@@ -50,12 +64,19 @@ class JobManager:
         governance_service: Optional[
             GovernanceService
         ] = None,
+        event_bus: Optional[
+            EventBus
+        ] = None,
     ):
         self.queue = queue
         self.worker = worker
 
         self.governance_service = (
             governance_service
+        )
+
+        self.event_bus = (
+            event_bus
         )
 
         self._jobs: dict[
@@ -72,6 +93,51 @@ class JobManager:
             str,
             JobExecutionResult,
         ] = {}
+
+    def _publish(
+        self,
+        *,
+        event_type: EventType,
+        message: str,
+        run_id: Optional[
+            str
+        ] = None,
+        job_id: Optional[
+            str
+        ] = None,
+        severity: EventSeverity = (
+            EventSeverity.INFO
+        ),
+        payload: Optional[
+            dict
+        ] = None,
+    ) -> None:
+        """
+        Publish lifecycle telemetry when
+        an EventBus is configured.
+
+        Event streaming remains optional
+        so existing JobManager consumers
+        remain backwards compatible.
+        """
+
+        if self.event_bus is None:
+            return
+
+        self.event_bus.publish(
+            NexusEvent(
+                type=event_type,
+                severity=severity,
+                run_id=run_id,
+                job_id=job_id,
+                source="job-manager",
+                message=message,
+                payload=(
+                    payload
+                    or {}
+                ),
+            )
+        )
 
     def submit(
         self,
@@ -107,6 +173,21 @@ class JobManager:
 
         self.queue.enqueue(
             job
+        )
+
+        self._publish(
+            event_type=(
+                EventType.JOB_QUEUED
+            ),
+            run_id=state.run_id,
+            job_id=job.id,
+            message="Job queued.",
+            payload={
+                "priority":
+                    job.priority.value,
+                "max_attempts":
+                    job.max_attempts,
+            },
         )
 
         return job
@@ -258,6 +339,121 @@ class JobManager:
             state.run_id
         )
 
+    def _execute(
+        self,
+        job: WorkflowJob,
+        state: NexusState,
+    ) -> JobExecutionResult:
+        """
+        Shared governed execution path
+        for execute_next() and
+        execute_job().
+
+        Publishes lifecycle events without
+        changing the worker's execution
+        semantics.
+        """
+
+        self._acquire_governance(
+            state
+        )
+
+        self._publish(
+            event_type=(
+                EventType.JOB_STARTED
+            ),
+            run_id=state.run_id,
+            job_id=job.id,
+            message="Job execution started.",
+            payload={
+                "attempt":
+                    job.attempt,
+                "max_attempts":
+                    job.max_attempts,
+            },
+        )
+
+        try:
+            result = (
+                self.worker.execute(
+                    job,
+                    state,
+                )
+            )
+
+        except Exception as exc:
+            self._publish(
+                event_type=(
+                    EventType.JOB_FAILED
+                ),
+                severity=(
+                    EventSeverity.ERROR
+                ),
+                run_id=state.run_id,
+                job_id=job.id,
+                message=(
+                    "Job execution failed."
+                ),
+                payload={
+                    "error":
+                        str(exc),
+                    "error_type":
+                        type(exc).__name__,
+                },
+            )
+
+            raise
+
+        finally:
+            self._release_governance(
+                state
+            )
+
+        self._results[
+            job.id
+        ] = result
+
+        if result.success:
+            self._publish(
+                event_type=(
+                    EventType.JOB_COMPLETED
+                ),
+                run_id=state.run_id,
+                job_id=job.id,
+                message=(
+                    "Job execution completed."
+                ),
+                payload={
+                    "status":
+                        job.status.value,
+                    "attempt":
+                        job.attempt,
+                },
+            )
+
+        else:
+            self._publish(
+                event_type=(
+                    EventType.JOB_FAILED
+                ),
+                severity=(
+                    EventSeverity.ERROR
+                ),
+                run_id=state.run_id,
+                job_id=job.id,
+                message=(
+                    "Job execution failed."
+                ),
+                payload={
+                    "status":
+                        job.status.value,
+                    "attempt":
+                        job.attempt,
+                },
+            )
+
+        return result
+
     def execute_next(
         self,
     ) -> Optional[
@@ -272,28 +468,10 @@ class JobManager:
             job.id
         )
 
-        self._acquire_governance(
-            state
+        return self._execute(
+            job,
+            state,
         )
-
-        try:
-            result = (
-                self.worker.execute(
-                    job,
-                    state,
-                )
-            )
-
-        finally:
-            self._release_governance(
-                state
-            )
-
-        self._results[
-            job.id
-        ] = result
-
-        return result
 
     def execute_job(
         self,
@@ -323,28 +501,10 @@ class JobManager:
             job_id
         )
 
-        self._acquire_governance(
-            state
+        return self._execute(
+            job,
+            state,
         )
-
-        try:
-            result = (
-                self.worker.execute(
-                    job,
-                    state,
-                )
-            )
-
-        finally:
-            self._release_governance(
-                state
-            )
-
-        self._results[
-            job.id
-        ] = result
-
-        return result
 
     def cancel(
         self,
@@ -361,9 +521,29 @@ class JobManager:
                 job_id
             )
 
-        return self.worker.cancel(
-            job
+        cancelled = (
+            self.worker.cancel(
+                job
+            )
         )
+
+        self._publish(
+            event_type=(
+                EventType.JOB_CANCELLED
+            ),
+            severity=(
+                EventSeverity.WARNING
+            ),
+            run_id=job.run_id,
+            job_id=job.id,
+            message="Job cancelled.",
+            payload={
+                "status":
+                    cancelled.status.value,
+            },
+        )
+
+        return cancelled
 
     def retry(
         self,
@@ -387,6 +567,23 @@ class JobManager:
         self._results.pop(
             job_id,
             None,
+        )
+
+        self._publish(
+            event_type=(
+                EventType.JOB_RETRIED
+            ),
+            run_id=job.run_id,
+            job_id=job.id,
+            message=(
+                "Job prepared for retry."
+            ),
+            payload={
+                "attempt":
+                    prepared.attempt,
+                "max_attempts":
+                    prepared.max_attempts,
+            },
         )
 
         return prepared
