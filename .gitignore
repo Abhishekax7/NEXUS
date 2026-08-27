@@ -1,8 +1,29 @@
+# Virtual environments
 venv/
+.venv/
+
+# Secrets
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# macOS
 .DS_Store
+
+# Runtime output
 logs/*
 workspace/*
 
+# Local persistent databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/*.sqlite3
