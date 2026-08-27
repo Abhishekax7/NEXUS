@@ -33,6 +33,7 @@ class LLMClient:
     - automatic rate-limit recovery
     - exponential retry backoff
     - finite retry budget
+    - optional completion-token control
     """
 
     def __init__(
@@ -353,6 +354,7 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens: Optional[int] = None,
     ) -> str:
         kwargs = {
             "model":
@@ -373,6 +375,17 @@ class LLMClient:
 
             "temperature": 0.1,
         }
+
+        if max_tokens is not None:
+            if max_tokens <= 0:
+                raise ValueError(
+                    "max_tokens must be "
+                    "greater than zero."
+                )
+
+            kwargs[
+                "max_completion_tokens"
+            ] = max_tokens
 
         if json_mode:
             kwargs[

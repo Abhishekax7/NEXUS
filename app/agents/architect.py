@@ -380,7 +380,17 @@ Rules:
 - prefer free/open-source technologies when required
 
 - every field is mandatory and non-empty
+- keep the architecture concise and implementation-focused
 
+- use 4 to 7 components
+
+- use at most 6 items in each list field
+
+- keep each component responsibility to one concise sentence
+
+- keep every list item to one concise sentence
+
+- avoid repeating requirements or research verbatim
 - do not return markdown
 
 - return JSON only
@@ -395,6 +405,7 @@ Rules:
                 system_prompt=system_prompt,
                 user_prompt=prompt,
                 json_mode=True,
+                max_tokens=3000,
             )
 
             try:

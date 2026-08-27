@@ -26,50 +26,85 @@ class FakeArchitectLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens=None,
     ) -> str:
         self.last_user_prompt = user_prompt
 
         return json.dumps(
             {
-                "architecture_style": "Layered modular architecture",
+                "architecture_style":
+                    "Layered modular architecture",
+
                 "components": [
                     {
-                        "name": "API Layer",
-                        "responsibility": "Expose application endpoints",
-                        "technology": "FastAPI",
+                        "name":
+                            "API Layer",
+
+                        "responsibility":
+                            "Expose application endpoints",
+
+                        "technology":
+                            "FastAPI",
                     },
                     {
-                        "name": "Retrieval Layer",
-                        "responsibility": "Retrieve relevant document chunks",
-                        "technology": "FAISS",
+                        "name":
+                            "Retrieval Layer",
+
+                        "responsibility":
+                            "Retrieve relevant "
+                            "document chunks",
+
+                        "technology":
+                            "FAISS",
                     },
                 ],
+
                 "data_flow": [
-                    "User request enters through the API layer",
+                    "User request enters through "
+                    "the API layer",
+
                     "Relevant chunks are retrieved",
-                    "Retrieved context is passed to generation",
+
+                    "Retrieved context is passed "
+                    "to generation",
                 ],
+
                 "technology_stack": [
                     "Python",
                     "FastAPI",
                     "FAISS",
                     "Groq",
                 ],
+
                 "interfaces": [
-                    "REST API between client and backend",
-                    "Internal interface between retrieval and generation",
+                    "REST API between client "
+                    "and backend",
+
+                    "Internal interface between "
+                    "retrieval and generation",
                 ],
+
                 "security_considerations": [
                     "Validate uploaded files",
                     "Protect credentials",
                 ],
+
                 "design_decisions": [
-                    "Use modular components for maintainability",
-                    "Use FAISS for free local vector retrieval",
+                    "Use modular components for "
+                    "maintainability",
+
+                    "Use FAISS for free local "
+                    "vector retrieval",
                 ],
+
                 "research_influences": [
-                    "FastAPI was selected based on the supplied research.",
-                    "FAISS was selected because the research identified it as a free local vector-search option.",
+                    "FastAPI was selected based "
+                    "on the supplied research.",
+
+                    "FAISS was selected because "
+                    "the research identified it "
+                    "as a free local "
+                    "vector-search option.",
                 ],
             }
         )
@@ -84,13 +119,16 @@ class RepairingArchitectLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens=None,
     ) -> str:
         self.calls += 1
 
         if self.calls == 1:
             return json.dumps(
                 {
-                    "architecture_style": "Layered architecture",
+                    "architecture_style":
+                        "Layered architecture",
+
                     "components": [],
                 }
             )
@@ -99,6 +137,7 @@ class RepairingArchitectLLM:
             system_prompt,
             user_prompt,
             json_mode,
+            max_tokens,
         )
 
 
@@ -108,6 +147,7 @@ class AlwaysInvalidArchitectLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        max_tokens=None,
     ) -> str:
         return "{}"
 
@@ -117,20 +157,26 @@ def create_requirements_artifact() -> Artifact:
         type=ArtifactType.REQUIREMENTS,
         name="requirements_analysis",
         content={
-            "objective": "Build a RAG application",
+            "objective":
+                "Build a RAG application",
+
             "functional_requirements": [
                 "Upload PDFs",
                 "Answer questions with citations",
             ],
+
             "non_functional_requirements": [
                 "Fast responses",
             ],
+
             "constraints": [
                 "Use free tools",
             ],
+
             "assumptions": [
                 "PDFs contain readable text",
             ],
+
             "acceptance_criteria": [
                 "Answers contain citations",
             ],
@@ -144,33 +190,51 @@ def create_research_artifact() -> Artifact:
         type=ArtifactType.RESEARCH,
         name="technical_research",
         content={
-            "research_question": (
-                "What technologies should be used?"
-            ),
+            "research_question":
+                "What technologies should be used?",
+
             "findings": [
                 "FastAPI is suitable for async APIs.",
-                "FAISS supports free local vector retrieval.",
+
+                "FAISS supports free local "
+                "vector retrieval.",
             ],
+
             "recommended_technologies": [
                 "FastAPI",
                 "FAISS",
             ],
+
             "tradeoffs": [
-                "FAISS is lightweight but has fewer database features.",
+                "FAISS is lightweight but has "
+                "fewer database features.",
             ],
+
             "risks": [
-                "Local inference performance depends on hardware.",
+                "Local inference performance "
+                "depends on hardware.",
             ],
+
             "sources": [
                 {
-                    "title": "FastAPI Documentation",
-                    "url": "https://fastapi.tiangolo.com/",
-                    "summary": "Official FastAPI documentation.",
+                    "title":
+                        "FastAPI Documentation",
+
+                    "url":
+                        "https://fastapi.tiangolo.com/",
+
+                    "summary":
+                        "Official FastAPI documentation.",
                 },
                 {
-                    "title": "FAISS Documentation",
-                    "url": "https://faiss.ai/",
-                    "summary": "FAISS vector-search documentation.",
+                    "title":
+                        "FAISS Documentation",
+
+                    "url":
+                        "https://faiss.ai/",
+
+                    "summary":
+                        "FAISS vector-search documentation.",
                 },
             ],
         },
@@ -183,16 +247,30 @@ def build_state_and_task():
         user_request="Build a RAG application"
     )
 
-    requirements = create_requirements_artifact()
-    research = create_research_artifact()
+    requirements = (
+        create_requirements_artifact()
+    )
 
-    state.add_artifact(requirements)
-    state.add_artifact(research)
+    research = (
+        create_research_artifact()
+    )
+
+    state.add_artifact(
+        requirements
+    )
+
+    state.add_artifact(
+        research
+    )
 
     task = AgentTask(
         title="Design architecture",
-        description="Design the software architecture.",
-        assigned_agent=AgentRole.ARCHITECT,
+        description=(
+            "Design the software architecture."
+        ),
+        assigned_agent=(
+            AgentRole.ARCHITECT
+        ),
         input_artifact_ids=[
             requirements.id,
             research.id,
@@ -212,16 +290,23 @@ def build_retriever(
         )
     )
 
-    return store, MemoryRetriever(
-        store
+    return (
+        store,
+        MemoryRetriever(
+            store
+        ),
     )
 
 
 def test_architect_agent_returns_architecture_artifact():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM()
+        llm_client=(
+            FakeArchitectLLM()
+        )
     )
 
     artifact = agent.execute(
@@ -229,32 +314,51 @@ def test_architect_agent_returns_architecture_artifact():
         state,
     )
 
-    assert artifact.type == ArtifactType.ARCHITECTURE
-    assert artifact.created_by == AgentRole.ARCHITECT
+    assert (
+        artifact.type
+        == ArtifactType.ARCHITECTURE
+    )
 
     assert (
-        artifact.content["architecture_style"]
+        artifact.created_by
+        == AgentRole.ARCHITECT
+    )
+
+    assert (
+        artifact.content[
+            "architecture_style"
+        ]
         == "Layered modular architecture"
     )
 
     assert len(
-        artifact.content["components"]
+        artifact.content[
+            "components"
+        ]
     ) > 0
 
     assert len(
-        artifact.content["technology_stack"]
+        artifact.content[
+            "technology_stack"
+        ]
     ) > 0
 
     assert len(
-        artifact.content["research_influences"]
+        artifact.content[
+            "research_influences"
+        ]
     ) > 0
 
 
 def test_architect_agent_is_grounded_in_both_inputs():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM()
+        llm_client=(
+            FakeArchitectLLM()
+        )
     )
 
     artifact = agent.execute(
@@ -263,21 +367,29 @@ def test_architect_agent_is_grounded_in_both_inputs():
     )
 
     assert (
-        artifact.metadata["grounded_in_requirements"]
+        artifact.metadata[
+            "grounded_in_requirements"
+        ]
         is True
     )
 
     assert (
-        artifact.metadata["grounded_in_research"]
+        artifact.metadata[
+            "grounded_in_research"
+        ]
         is True
     )
 
 
 def test_architect_without_memory_preserves_old_behavior():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM()
+        llm_client=(
+            FakeArchitectLLM()
+        )
     )
 
     artifact = agent.execute(
@@ -286,20 +398,28 @@ def test_architect_without_memory_preserves_old_behavior():
     )
 
     assert (
-        artifact.metadata["memory_augmented"]
+        artifact.metadata[
+            "memory_augmented"
+        ]
         is False
     )
 
     assert (
-        artifact.metadata["memory_context_count"]
+        artifact.metadata[
+            "memory_context_count"
+        ]
         == 0
     )
 
 
 def test_research_reaches_architect_prompt():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm
@@ -310,7 +430,10 @@ def test_research_reaches_architect_prompt():
         state,
     )
 
-    assert fake_llm.last_user_prompt is not None
+    assert (
+        fake_llm.last_user_prompt
+        is not None
+    )
 
     assert (
         "FastAPI is suitable for async APIs."
@@ -318,7 +441,8 @@ def test_research_reaches_architect_prompt():
     )
 
     assert (
-        "FAISS supports free local vector retrieval."
+        "FAISS supports free local "
+        "vector retrieval."
         in fake_llm.last_user_prompt
     )
 
@@ -331,8 +455,10 @@ def test_research_reaches_architect_prompt():
 def test_architect_injects_relevant_architecture_memory(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
     store.save(
@@ -340,28 +466,42 @@ def test_architect_injects_relevant_architecture_memory(
         memory_type="artifact",
         key="architecture",
         value={
-            "artifact_id": "old-architecture",
-            "name": "architecture_design",
-            "type": "architecture",
-            "created_by": "architect",
+            "artifact_id":
+                "old-architecture",
+
+            "name":
+                "architecture_design",
+
+            "type":
+                "architecture",
+
+            "created_by":
+                "architect",
+
             "content": {
-                "architecture_style": (
-                    "Modular FastAPI architecture"
-                ),
+                "architecture_style":
+                    "Modular FastAPI architecture",
+
                 "technology_stack": [
                     "FastAPI",
                     "FAISS",
                 ],
+
                 "design_decisions": [
-                    "Separate retrieval from API layer."
+                    "Separate retrieval "
+                    "from API layer."
                 ],
             },
         },
     )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm,
@@ -374,12 +514,16 @@ def test_architect_injects_relevant_architecture_memory(
     )
 
     assert (
-        artifact.metadata["memory_augmented"]
+        artifact.metadata[
+            "memory_augmented"
+        ]
         is True
     )
 
     assert (
-        artifact.metadata["memory_context_count"]
+        artifact.metadata[
+            "memory_context_count"
+        ]
         >= 1
     )
 
@@ -392,8 +536,10 @@ def test_architect_injects_relevant_architecture_memory(
 def test_architect_injects_relevant_critic_feedback(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
     store.save(
@@ -401,20 +547,31 @@ def test_architect_injects_relevant_critic_feedback(
         memory_type="critic",
         key="old_quality_gate",
         value={
-            "verdict": "revise",
-            "quality_score": 70,
+            "verdict":
+                "revise",
+
+            "quality_score":
+                70,
+
             "summary": (
-                "FastAPI design lacked input validation."
+                "FastAPI design lacked "
+                "input validation."
             ),
+
             "required_improvements": [
-                "Add strict API input validation."
+                "Add strict API input "
+                "validation."
             ],
         },
     )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm,
@@ -427,7 +584,9 @@ def test_architect_injects_relevant_critic_feedback(
     )
 
     assert (
-        artifact.metadata["memory_augmented"]
+        artifact.metadata[
+            "memory_augmented"
+        ]
         is True
     )
 
@@ -440,8 +599,10 @@ def test_architect_injects_relevant_critic_feedback(
 def test_architect_injects_relevant_security_feedback(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
     store.save(
@@ -449,20 +610,29 @@ def test_architect_injects_relevant_security_feedback(
         memory_type="security",
         key="old_security_review",
         value={
-            "risk_score": 65,
+            "risk_score":
+                65,
+
             "summary": (
-                "FastAPI upload endpoint needed "
-                "stronger file validation."
+                "FastAPI upload endpoint "
+                "needed stronger file "
+                "validation."
             ),
+
             "findings": [
-                "Validate uploaded file types."
+                "Validate uploaded "
+                "file types."
             ],
         },
     )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm,
@@ -475,7 +645,9 @@ def test_architect_injects_relevant_security_feedback(
     )
 
     assert (
-        artifact.metadata["memory_augmented"]
+        artifact.metadata[
+            "memory_augmented"
+        ]
         is True
     )
 
@@ -488,11 +660,15 @@ def test_architect_injects_relevant_security_feedback(
 def test_architect_excludes_current_run_memory(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     store.save(
         run_id=state.run_id,
@@ -500,15 +676,19 @@ def test_architect_excludes_current_run_memory(
         key="current_run_feedback",
         value={
             "summary": (
-                "FastAPI FAISS validation feedback"
+                "FastAPI FAISS "
+                "validation feedback"
             ),
+
             "required_improvements": [
                 "Current run only"
             ],
         },
     )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm,
@@ -526,7 +706,9 @@ def test_architect_excludes_current_run_memory(
     )
 
     assert (
-        artifact.metadata["memory_context_count"]
+        artifact.metadata[
+            "memory_context_count"
+        ]
         == 0
     )
 
@@ -534,8 +716,10 @@ def test_architect_excludes_current_run_memory(
 def test_architect_does_not_inject_irrelevant_memory(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
     store.save(
@@ -545,8 +729,10 @@ def test_architect_does_not_inject_irrelevant_memory(
         value={
             "content": {
                 "architecture_style": (
-                    "Quantum telescope processing"
+                    "Quantum telescope "
+                    "processing"
                 ),
+
                 "technology_stack": [
                     "Astrophysics",
                 ],
@@ -554,9 +740,13 @@ def test_architect_does_not_inject_irrelevant_memory(
         },
     )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
-    fake_llm = FakeArchitectLLM()
+    fake_llm = (
+        FakeArchitectLLM()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm,
@@ -569,12 +759,16 @@ def test_architect_does_not_inject_irrelevant_memory(
     )
 
     assert (
-        artifact.metadata["memory_augmented"]
+        artifact.metadata[
+            "memory_augmented"
+        ]
         is False
     )
 
     assert (
-        artifact.metadata["memory_context_count"]
+        artifact.metadata[
+            "memory_context_count"
+        ]
         == 0
     )
 
@@ -582,20 +776,29 @@ def test_architect_does_not_inject_irrelevant_memory(
 def test_architect_respects_memory_limit(
     tmp_path,
 ):
-    store, retriever = build_retriever(
-        tmp_path
+    store, retriever = (
+        build_retriever(
+            tmp_path
+        )
     )
 
     for index in range(6):
         store.save(
-            run_id=f"old-run-{index}",
+            run_id=(
+                f"old-run-{index}"
+            ),
             memory_type="artifact",
-            key=f"fastapi_architecture_{index}",
+            key=(
+                f"fastapi_architecture_"
+                f"{index}"
+            ),
             value={
                 "content": {
                     "architecture_style": (
-                        "FastAPI FAISS modular architecture"
+                        "FastAPI FAISS "
+                        "modular architecture"
                     ),
+
                     "technology_stack": [
                         "FastAPI",
                         "FAISS",
@@ -604,10 +807,14 @@ def test_architect_respects_memory_limit(
             },
         )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM(),
+        llm_client=(
+            FakeArchitectLLM()
+        ),
         memory_retriever=retriever,
         memory_limit=2,
     )
@@ -618,15 +825,21 @@ def test_architect_respects_memory_limit(
     )
 
     assert (
-        artifact.metadata["memory_context_count"]
+        artifact.metadata[
+            "memory_context_count"
+        ]
         <= 2
     )
 
 
 def test_architect_agent_repairs_invalid_output():
-    fake_llm = RepairingArchitectLLM()
+    fake_llm = (
+        RepairingArchitectLLM()
+    )
 
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
         llm_client=fake_llm
@@ -637,23 +850,34 @@ def test_architect_agent_repairs_invalid_output():
         state,
     )
 
-    assert fake_llm.calls == 2
+    assert (
+        fake_llm.calls
+        == 2
+    )
 
     assert (
-        artifact.metadata["validation_attempts"]
+        artifact.metadata[
+            "validation_attempts"
+        ]
         == 2
     )
 
     assert len(
-        artifact.content["research_influences"]
+        artifact.content[
+            "research_influences"
+        ]
     ) > 0
 
 
 def test_architect_agent_fails_after_retry_limit():
-    state, task = build_state_and_task()
+    state, task = (
+        build_state_and_task()
+    )
 
     agent = ArchitectAgent(
-        llm_client=AlwaysInvalidArchitectLLM(),
+        llm_client=(
+            AlwaysInvalidArchitectLLM()
+        ),
         max_validation_retries=1,
     )
 
@@ -671,25 +895,37 @@ def test_architect_agent_fails_without_requirements():
         user_request="Build an application"
     )
 
-    research = create_research_artifact()
-    state.add_artifact(research)
+    research = (
+        create_research_artifact()
+    )
+
+    state.add_artifact(
+        research
+    )
 
     task = AgentTask(
         title="Design architecture",
         description="Design the system.",
-        assigned_agent=AgentRole.ARCHITECT,
+        assigned_agent=(
+            AgentRole.ARCHITECT
+        ),
         input_artifact_ids=[
             research.id
         ],
     )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM()
+        llm_client=(
+            FakeArchitectLLM()
+        )
     )
 
     with pytest.raises(
         ArchitectureGenerationError,
-        match="requirements artifact not found",
+        match=(
+            "requirements artifact "
+            "not found"
+        ),
     ):
         agent.execute(
             task,
@@ -702,25 +938,36 @@ def test_architect_agent_fails_without_research():
         user_request="Build an application"
     )
 
-    requirements = create_requirements_artifact()
-    state.add_artifact(requirements)
+    requirements = (
+        create_requirements_artifact()
+    )
+
+    state.add_artifact(
+        requirements
+    )
 
     task = AgentTask(
         title="Design architecture",
         description="Design the system.",
-        assigned_agent=AgentRole.ARCHITECT,
+        assigned_agent=(
+            AgentRole.ARCHITECT
+        ),
         input_artifact_ids=[
             requirements.id
         ],
     )
 
     agent = ArchitectAgent(
-        llm_client=FakeArchitectLLM()
+        llm_client=(
+            FakeArchitectLLM()
+        )
     )
 
     with pytest.raises(
         ArchitectureGenerationError,
-        match="research artifact not found",
+        match=(
+            "research artifact not found"
+        ),
     ):
         agent.execute(
             task,

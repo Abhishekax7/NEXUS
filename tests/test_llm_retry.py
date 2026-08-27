@@ -310,3 +310,52 @@ def test_json_mode_is_forwarded(
         ]
         == "json_object"
     )
+def test_max_tokens_is_forwarded(
+    monkeypatch,
+):
+    captured = {}
+
+    class FakeCompletions:
+        def create(
+            self,
+            **kwargs,
+        ):
+            captured.update(
+                kwargs
+            )
+
+            return fake_response(
+                "{}"
+            )
+
+    fake_groq = (
+        SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=(
+                    FakeCompletions()
+                )
+            )
+        )
+    )
+
+    monkeypatch.setattr(
+        "app.core.llm.Groq",
+        lambda **kwargs:
+            fake_groq,
+    )
+
+    client = LLMClient()
+
+    client.generate(
+        "system",
+        "user",
+        json_mode=True,
+        max_tokens=3000,
+    )
+
+    assert (
+        captured[
+            "max_completion_tokens"
+        ]
+        == 3000
+    )
