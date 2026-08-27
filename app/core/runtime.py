@@ -16,6 +16,19 @@ from app.core.models import AgentRole
 from app.core.plan_mutator import PlanMutator
 from app.core.repair_loop import RepairLoop
 
+from app.evaluation.benchmark import (
+    BenchmarkEngine,
+)
+from app.evaluation.engine import (
+    EvaluationEngine,
+)
+from app.evaluation.history import (
+    EvaluationHistoryStore,
+)
+from app.evaluation.service import (
+    EvaluationService,
+)
+
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import MemoryStore
@@ -33,7 +46,15 @@ from app.tools.workspace import WorkspaceWriter
 
 
 DEFAULT_WORKSPACE_ROOT = "workspace"
-DEFAULT_MEMORY_DB_PATH = "data/nexus_memory.db"
+
+DEFAULT_MEMORY_DB_PATH = (
+    "data/nexus_memory.db"
+)
+
+DEFAULT_EVALUATION_DB_PATH = (
+    "data/nexus_evaluations.db"
+)
+
 DEFAULT_COMMAND_TIMEOUT = 20
 DEFAULT_MAX_REPAIRS = 2
 DEFAULT_MAX_REPLANS = 3
@@ -48,10 +69,8 @@ def build_default_registry(
     ] = None,
 ) -> AgentRegistry:
     """
-    Build the production agent registry.
-
-    Optional runtime dependencies are
-    injected into the agents that use them.
+    Build the production NEXUS
+    agent registry.
     """
 
     registry = AgentRegistry()
@@ -71,7 +90,9 @@ def build_default_registry(
     registry.register(
         AgentRole.ARCHITECT,
         lambda: ArchitectAgent(
-            memory_retriever=memory_retriever
+            memory_retriever=(
+                memory_retriever
+            )
         ),
     )
 
@@ -93,7 +114,9 @@ def build_default_registry(
     registry.register(
         AgentRole.CRITIC,
         lambda: CriticAgent(
-            memory_retriever=memory_retriever
+            memory_retriever=(
+                memory_retriever
+            )
         ),
     )
 
@@ -101,7 +124,9 @@ def build_default_registry(
 
 
 def build_memory_manager(
-    memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
+    memory_db_path: str = (
+        DEFAULT_MEMORY_DB_PATH
+    ),
 ) -> MemoryManager:
     """
     Build persistent NEXUS memory.
@@ -120,8 +145,8 @@ def build_memory_retriever(
     memory_manager: MemoryManager,
 ) -> MemoryRetriever:
     """
-    Build semantic/deterministic retrieval
-    over the persistent memory store.
+    Build retrieval over the same
+    persistent memory store.
     """
 
     return MemoryRetriever(
@@ -130,16 +155,22 @@ def build_memory_retriever(
 
 
 def build_repair_loop(
-    workspace_root: str = DEFAULT_WORKSPACE_ROOT,
-    command_timeout: int = DEFAULT_COMMAND_TIMEOUT,
-    max_repairs: int = DEFAULT_MAX_REPAIRS,
+    workspace_root: str = (
+        DEFAULT_WORKSPACE_ROOT
+    ),
+    command_timeout: int = (
+        DEFAULT_COMMAND_TIMEOUT
+    ),
+    max_repairs: int = (
+        DEFAULT_MAX_REPAIRS
+    ),
     memory_retriever: Optional[
         MemoryRetriever
     ] = None,
 ) -> RepairLoop:
     """
-    Build the self-healing testing,
-    debugging, and patching subsystem.
+    Build the autonomous
+    test-debug-patch-retest subsystem.
     """
 
     workspace_writer = WorkspaceWriter(
@@ -147,16 +178,22 @@ def build_repair_loop(
     )
 
     executor = CommandExecutor(
-        timeout_seconds=command_timeout
+        timeout_seconds=(
+            command_timeout
+        )
     )
 
     tester = TesterAgent(
-        workspace_writer=workspace_writer,
+        workspace_writer=(
+            workspace_writer
+        ),
         executor=executor,
     )
 
     debugger = DebuggerAgent(
-        memory_retriever=memory_retriever
+        memory_retriever=(
+            memory_retriever
+        )
     )
 
     patcher = PatchApplicator(
@@ -181,27 +218,30 @@ def build_replanner() -> ReplannerAgent:
 
 def build_plan_mutator() -> PlanMutator:
     """
-    Build the deterministic plan mutation
-    layer used by dynamic replanning.
+    Build deterministic DAG mutation.
     """
 
     return PlanMutator()
 
 
 def build_tool_registry(
-    workspace_root: str = DEFAULT_WORKSPACE_ROOT,
+    workspace_root: str = (
+        DEFAULT_WORKSPACE_ROOT
+    ),
     memory_retriever: Optional[
         MemoryRetriever
     ] = None,
 ) -> ToolRegistry:
     """
     Build the production allow-listed
-    NEXUS tool registry.
+    tool registry.
     """
 
     return build_production_tool_registry(
         workspace_root=workspace_root,
-        memory_retriever=memory_retriever,
+        memory_retriever=(
+            memory_retriever
+        ),
     )
 
 
@@ -209,8 +249,8 @@ def build_tool_runtime(
     tool_registry: ToolRegistry,
 ) -> ToolRuntime:
     """
-    Build the production dynamic tool
-    selection and execution subsystem.
+    Build AI tool selection plus
+    validated tool execution.
     """
 
     selector = ToolSelector(
@@ -227,16 +267,70 @@ def build_tool_runtime(
     )
 
 
+def build_evaluation_service(
+    evaluation_db_path: str = (
+        DEFAULT_EVALUATION_DB_PATH
+    ),
+    auto_create_baseline: bool = True,
+) -> EvaluationService:
+    """
+    Build the deterministic production
+    evaluation and benchmarking pipeline.
+    """
+
+    evaluation_engine = (
+        EvaluationEngine()
+    )
+
+    history_store = (
+        EvaluationHistoryStore(
+            db_path=evaluation_db_path
+        )
+    )
+
+    benchmark_engine = (
+        BenchmarkEngine()
+    )
+
+    return EvaluationService(
+        evaluation_engine=(
+            evaluation_engine
+        ),
+        history_store=history_store,
+        benchmark_engine=(
+            benchmark_engine
+        ),
+        auto_create_baseline=(
+            auto_create_baseline
+        ),
+    )
+
+
 def build_nexus_engine(
-    workspace_root: str = DEFAULT_WORKSPACE_ROOT,
-    memory_db_path: str = DEFAULT_MEMORY_DB_PATH,
-    command_timeout: int = DEFAULT_COMMAND_TIMEOUT,
-    max_repairs: int = DEFAULT_MAX_REPAIRS,
-    max_replans: int = DEFAULT_MAX_REPLANS,
+    workspace_root: str = (
+        DEFAULT_WORKSPACE_ROOT
+    ),
+    memory_db_path: str = (
+        DEFAULT_MEMORY_DB_PATH
+    ),
+    evaluation_db_path: str = (
+        DEFAULT_EVALUATION_DB_PATH
+    ),
+    command_timeout: int = (
+        DEFAULT_COMMAND_TIMEOUT
+    ),
+    max_repairs: int = (
+        DEFAULT_MAX_REPAIRS
+    ),
+    max_replans: int = (
+        DEFAULT_MAX_REPLANS
+    ),
     enable_self_healing: bool = True,
     enable_memory: bool = True,
     enable_replanning: bool = True,
     enable_tools: bool = True,
+    enable_evaluation: bool = True,
+    auto_create_evaluation_baseline: bool = True,
 ) -> NexusEngine:
     """
     Construct the complete production
@@ -251,8 +345,12 @@ def build_nexus_engine(
     memory_retriever = None
 
     if enable_memory:
-        memory_manager = build_memory_manager(
-            memory_db_path=memory_db_path
+        memory_manager = (
+            build_memory_manager(
+                memory_db_path=(
+                    memory_db_path
+                )
+            )
         )
 
         memory_retriever = (
@@ -262,7 +360,7 @@ def build_nexus_engine(
         )
 
     # ---------------------------------
-    # Self-healing runtime
+    # Self-healing
     # ---------------------------------
 
     repair_loop = None
@@ -270,9 +368,13 @@ def build_nexus_engine(
     if enable_self_healing:
         repair_loop = build_repair_loop(
             workspace_root=workspace_root,
-            command_timeout=command_timeout,
+            command_timeout=(
+                command_timeout
+            ),
             max_repairs=max_repairs,
-            memory_retriever=memory_retriever,
+            memory_retriever=(
+                memory_retriever
+            ),
         )
 
     # ---------------------------------
@@ -283,58 +385,86 @@ def build_nexus_engine(
     plan_mutator = None
 
     if enable_replanning:
-        replanner = build_replanner()
+        replanner = (
+            build_replanner()
+        )
 
         plan_mutator = (
             build_plan_mutator()
         )
 
     # ---------------------------------
-    # Dynamic production tools
+    # Tool intelligence
     # ---------------------------------
 
     tool_registry = None
     tool_runtime = None
 
     if enable_tools:
-        tool_registry = build_tool_registry(
-            workspace_root=workspace_root,
-            memory_retriever=memory_retriever,
+        tool_registry = (
+            build_tool_registry(
+                workspace_root=(
+                    workspace_root
+                ),
+                memory_retriever=(
+                    memory_retriever
+                ),
+            )
         )
 
-        tool_runtime = build_tool_runtime(
-            tool_registry
+        tool_runtime = (
+            build_tool_runtime(
+                tool_registry
+            )
+        )
+
+    # ---------------------------------
+    # Evaluation + benchmarking
+    # ---------------------------------
+
+    evaluation_service = None
+
+    if enable_evaluation:
+        evaluation_service = (
+            build_evaluation_service(
+                evaluation_db_path=(
+                    evaluation_db_path
+                ),
+                auto_create_baseline=(
+                    auto_create_evaluation_baseline
+                ),
+            )
         )
 
     # ---------------------------------
     # Agent registry
-    #
-    # Build this AFTER tool runtime so
-    # ResearchAgent receives the exact
-    # production ToolRuntime instance.
     # ---------------------------------
 
     registry = build_default_registry(
-        memory_retriever=memory_retriever,
+        memory_retriever=(
+            memory_retriever
+        ),
         tool_runtime=tool_runtime,
     )
 
     # ---------------------------------
-    # Main orchestration engine
+    # Main engine
     # ---------------------------------
 
     engine = NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
-        memory_manager=memory_manager,
+        memory_manager=(
+            memory_manager
+        ),
         replanner=replanner,
         plan_mutator=plan_mutator,
         max_replans=max_replans,
+        evaluation_service=(
+            evaluation_service
+        ),
     )
 
-    # Tool infrastructure is optional,
-    # so expose it on the engine after
-    # construction.
     engine.tool_registry = (
         tool_registry
     )

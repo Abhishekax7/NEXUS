@@ -2,6 +2,7 @@ from typing import Optional
 
 from app.agents.registry import AgentRegistry
 from app.agents.replanner import ReplannerAgent
+
 from app.core.models import AgentRole
 from app.core.plan_mutator import (
     PlanMutator,
@@ -14,30 +15,56 @@ from app.core.scheduler import (
     get_ready_tasks,
 )
 from app.core.state import NexusState
+
+from app.evaluation.service import (
+    EvaluationService,
+    EvaluationServiceResult,
+)
+
 from app.memory.manager import MemoryManager
 
 
 class WorkflowStalled(Exception):
-    """Raised when unfinished tasks exist but none are runnable."""
+    """
+    Raised when unfinished tasks exist
+    but none are runnable.
+    """
 
 
 class WorkflowRepairFailed(Exception):
-    """Raised when autonomous repair cannot recover failing code."""
+    """
+    Raised when autonomous repair
+    cannot recover failing code.
+    """
 
 
 class ReplanningLimitExceeded(Exception):
-    """Raised when the workflow exceeds its replan budget."""
+    """
+    Raised when the workflow exceeds
+    its replan budget.
+    """
 
 
 class NexusEngine:
     def __init__(
         self,
         registry: AgentRegistry,
-        repair_loop: Optional[RepairLoop] = None,
-        memory_manager: Optional[MemoryManager] = None,
-        replanner: Optional[ReplannerAgent] = None,
-        plan_mutator: Optional[PlanMutator] = None,
+        repair_loop: Optional[
+            RepairLoop
+        ] = None,
+        memory_manager: Optional[
+            MemoryManager
+        ] = None,
+        replanner: Optional[
+            ReplannerAgent
+        ] = None,
+        plan_mutator: Optional[
+            PlanMutator
+        ] = None,
         max_replans: int = 3,
+        evaluation_service: Optional[
+            EvaluationService
+        ] = None,
     ):
         if max_replans < 0:
             raise ValueError(
@@ -50,17 +77,40 @@ class NexusEngine:
             registry
         )
 
-        self.repair_loop = repair_loop
-        self.memory_manager = memory_manager
+        self.repair_loop = (
+            repair_loop
+        )
 
-        self.replanner = replanner
+        self.memory_manager = (
+            memory_manager
+        )
+
+        self.replanner = (
+            replanner
+        )
 
         self.plan_mutator = (
             plan_mutator
             or PlanMutator()
         )
 
-        self.max_replans = max_replans
+        self.max_replans = (
+            max_replans
+        )
+
+        self.evaluation_service = (
+            evaluation_service
+        )
+
+        self.last_evaluation_result: Optional[
+            EvaluationServiceResult
+        ] = None
+
+        # These remain optional production
+        # runtime attributes populated by
+        # app.core.runtime.
+        self.tool_registry = None
+        self.tool_runtime = None
 
     def _remember_task(
         self,
@@ -166,7 +216,8 @@ class NexusEngine:
             message = (
                 "Autonomous repair exhausted its "
                 f"retry budget after "
-                f"{repair_result.attempts} repair attempts."
+                f"{repair_result.attempts} "
+                "repair attempts."
             )
 
             state.errors.append(
@@ -210,14 +261,17 @@ class NexusEngine:
         result: PlanMutationResult,
         state: NexusState,
     ) -> None:
-        history = state.metadata.setdefault(
-            "replan_history",
-            [],
+        history = (
+            state.metadata.setdefault(
+                "replan_history",
+                [],
+            )
         )
 
         history.append(
             {
-                "action": result.action.value,
+                "action":
+                    result.action.value,
                 "added_task_id":
                     result.added_task_id,
                 "removed_task_id":
@@ -234,8 +288,10 @@ class NexusEngine:
         if self.replanner is None:
             return
 
-        decision = self.replanner.decide(
-            state
+        decision = (
+            self.replanner.decide(
+                state
+            )
         )
 
         if not decision.should_replan:
@@ -283,11 +339,70 @@ class NexusEngine:
             state,
         )
 
+    def _evaluate_completed_run(
+        self,
+        state: NexusState,
+    ) -> None:
+        """
+        Evaluate, persist, and benchmark
+        a successfully completed workflow.
+
+        The main engine return type stays
+        NexusState for backward compatibility.
+        """
+
+        if self.evaluation_service is None:
+            return
+
+        result = (
+            self.evaluation_service
+            .evaluate_run(
+                state
+            )
+        )
+
+        self.last_evaluation_result = (
+            result
+        )
+
+        state.metadata[
+            "evaluation"
+        ] = (
+            result.evaluation.model_dump(
+                mode="json"
+            )
+        )
+
+        state.metadata[
+            "evaluation_baseline_run_id"
+        ] = (
+            result.baseline_run_id
+        )
+
+        state.metadata[
+            "evaluation_baseline_created"
+        ] = (
+            result.baseline_created
+        )
+
+        if result.benchmark is None:
+            state.metadata[
+                "evaluation_benchmark"
+            ] = None
+
+        else:
+            state.metadata[
+                "evaluation_benchmark"
+            ] = (
+                result.benchmark.model_dump(
+                    mode="json"
+                )
+            )
+
     def run(
         self,
         state: NexusState,
     ) -> NexusState:
-
         while not all_tasks_completed(
             state
         ):
@@ -299,7 +414,8 @@ class NexusEngine:
                 state.failed = True
 
                 state.errors.append(
-                    "Workflow stalled: unfinished tasks exist "
+                    "Workflow stalled: "
+                    "unfinished tasks exist "
                     "but no tasks are ready."
                 )
 
@@ -350,5 +466,9 @@ class NexusEngine:
 
         state.completed = True
         state.failed = False
+
+        self._evaluate_completed_run(
+            state
+        )
 
         return state
