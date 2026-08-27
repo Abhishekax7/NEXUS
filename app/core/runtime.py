@@ -11,14 +11,15 @@ from app.agents.research import ResearchAgent
 from app.agents.security import SecurityAgent
 from app.agents.tester import TesterAgent
 
-from app.approval.gate import (
-    ApprovalGate,
+from app.approval.gate import ApprovalGate
+from app.approval.manager import ApprovalManager
+from app.approval.policy import ApprovalPolicy
+
+from app.checkpointing.service import (
+    CheckpointService,
 )
-from app.approval.manager import (
-    ApprovalManager,
-)
-from app.approval.policy import (
-    ApprovalPolicy,
+from app.checkpointing.store import (
+    CheckpointStore,
 )
 
 from app.core.engine import NexusEngine
@@ -74,6 +75,10 @@ DEFAULT_EVALUATION_DB_PATH = (
 
 DEFAULT_TRACE_DB_PATH = (
     "data/nexus_traces.db"
+)
+
+DEFAULT_CHECKPOINT_DB_PATH = (
+    "data/nexus_checkpoints.db"
 )
 
 DEFAULT_COMMAND_TIMEOUT = 20
@@ -317,6 +322,20 @@ def build_observability_service(
     )
 
 
+def build_checkpoint_service(
+    checkpoint_db_path: str = (
+        DEFAULT_CHECKPOINT_DB_PATH
+    ),
+) -> CheckpointService:
+    checkpoint_store = CheckpointStore(
+        db_path=checkpoint_db_path
+    )
+
+    return CheckpointService(
+        store=checkpoint_store
+    )
+
+
 def build_nexus_engine(
     workspace_root: str = (
         DEFAULT_WORKSPACE_ROOT
@@ -329,6 +348,9 @@ def build_nexus_engine(
     ),
     trace_db_path: str = (
         DEFAULT_TRACE_DB_PATH
+    ),
+    checkpoint_db_path: str = (
+        DEFAULT_CHECKPOINT_DB_PATH
     ),
     command_timeout: int = (
         DEFAULT_COMMAND_TIMEOUT
@@ -346,6 +368,7 @@ def build_nexus_engine(
     enable_evaluation: bool = True,
     enable_observability: bool = True,
     enable_approvals: bool = True,
+    enable_checkpointing: bool = True,
     require_medium_risk_approval: bool = False,
     auto_create_evaluation_baseline: bool = True,
 ) -> NexusEngine:
@@ -357,12 +380,8 @@ def build_nexus_engine(
     memory_retriever = None
 
     if enable_memory:
-        memory_manager = (
-            build_memory_manager(
-                memory_db_path=(
-                    memory_db_path
-                )
-            )
+        memory_manager = build_memory_manager(
+            memory_db_path=memory_db_path
         )
 
         memory_retriever = (
@@ -397,7 +416,7 @@ def build_nexus_engine(
         plan_mutator = build_plan_mutator()
 
     # ---------------------------------
-    # Human approval subsystem
+    # Human approval
     # ---------------------------------
 
     approval_manager = None
@@ -472,6 +491,21 @@ def build_nexus_engine(
         )
 
     # ---------------------------------
+    # Checkpointing + recovery
+    # ---------------------------------
+
+    checkpoint_service = None
+
+    if enable_checkpointing:
+        checkpoint_service = (
+            build_checkpoint_service(
+                checkpoint_db_path=(
+                    checkpoint_db_path
+                )
+            )
+        )
+
+    # ---------------------------------
     # Agents
     # ---------------------------------
 
@@ -496,6 +530,9 @@ def build_nexus_engine(
         ),
         observability_service=(
             observability_service
+        ),
+        checkpoint_service=(
+            checkpoint_service
         ),
     )
 

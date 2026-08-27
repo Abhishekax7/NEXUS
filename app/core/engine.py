@@ -3,7 +3,18 @@ from typing import Optional
 from app.agents.registry import AgentRegistry
 from app.agents.replanner import ReplannerAgent
 
-from app.core.models import AgentRole
+from app.checkpointing.models import (
+    CheckpointError,
+    RecoveryStatus,
+)
+from app.checkpointing.service import (
+    CheckpointService,
+)
+
+from app.core.models import (
+    AgentRole,
+    TaskStatus,
+)
 from app.core.plan_mutator import (
     PlanMutator,
     PlanMutationResult,
@@ -75,6 +86,9 @@ class NexusEngine:
         observability_service: Optional[
             ObservabilityService
         ] = None,
+        checkpoint_service: Optional[
+            CheckpointService
+        ] = None,
     ):
         if max_replans < 0:
             raise ValueError(
@@ -112,6 +126,10 @@ class NexusEngine:
             observability_service
         )
 
+        self.checkpoint_service = (
+            checkpoint_service
+        )
+
         self.last_evaluation_result: Optional[
             EvaluationServiceResult
         ] = None
@@ -122,6 +140,9 @@ class NexusEngine:
 
         self.tool_registry = None
         self.tool_runtime = None
+
+        self.approval_manager = None
+        self.approval_gate = None
 
     def _agent_role_value(
         self,
@@ -203,6 +224,96 @@ class NexusEngine:
 
         self.observability_service.save(
             collector.trace
+        )
+
+    def _checkpoint_started(
+        self,
+        state: NexusState,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.workflow_started(
+            state
+        )
+
+    def _checkpoint_task_completed(
+        self,
+        state: NexusState,
+        task_id: str,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.task_completed(
+            state,
+            task_id,
+        )
+
+    def _checkpoint_iteration_completed(
+        self,
+        state: NexusState,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.iteration_completed(
+            state
+        )
+
+    def _checkpoint_repair_completed(
+        self,
+        state: NexusState,
+        *,
+        attempts: int,
+        passed: bool,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.repair_completed(
+            state,
+            attempts=attempts,
+            passed=passed,
+        )
+
+    def _checkpoint_replan_completed(
+        self,
+        state: NexusState,
+        *,
+        action: str,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.replan_completed(
+            state,
+            action=action,
+        )
+
+    def _checkpoint_completed(
+        self,
+        state: NexusState,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.workflow_completed(
+            state
+        )
+
+    def _checkpoint_failed(
+        self,
+        state: NexusState,
+        *,
+        reason: str,
+    ) -> None:
+        if self.checkpoint_service is None:
+            return
+
+        self.checkpoint_service.workflow_failed(
+            state,
+            reason=reason,
         )
 
     def _remember_task(
@@ -351,6 +462,16 @@ class NexusEngine:
             self._save_trace(
                 collector
             )
+
+        self._checkpoint_repair_completed(
+            state,
+            attempts=(
+                repair_result.attempts
+            ),
+            passed=(
+                repair_result.passed
+            ),
+        )
 
         if not repair_result.passed:
             state.failed = True
@@ -506,6 +627,13 @@ class NexusEngine:
                 collector
             )
 
+        self._checkpoint_replan_completed(
+            state,
+            action=(
+                result.action.value
+            ),
+        )
+
     def _evaluate_completed_run(
         self,
         state: NexusState,
@@ -513,11 +641,6 @@ class NexusEngine:
             TraceCollector
         ] = None,
     ) -> None:
-        """
-        Evaluate, persist, and benchmark
-        a successfully completed workflow.
-        """
-
         if self.evaluation_service is None:
             return
 
@@ -589,11 +712,155 @@ class NexusEngine:
                 collector
             )
 
+    def restore_run(
+        self,
+        run_id: str,
+        *,
+        allow_failed: bool = False,
+    ) -> NexusState:
+        """
+        Restore the latest persisted state
+        for an interrupted workflow.
+
+        Failed runs require allow_failed=True.
+
+        Completed tasks remain completed,
+        while failed tasks become pending
+        so the scheduler can retry them.
+        """
+
+        if self.checkpoint_service is None:
+            raise CheckpointError(
+                "Checkpointing is not configured."
+            )
+
+        info = (
+            self.checkpoint_service
+            .recovery_info(
+                run_id
+            )
+        )
+
+        if (
+            info.status
+            == RecoveryStatus.NOT_FOUND
+        ):
+            raise CheckpointError(
+                "No checkpoint exists for run: "
+                f"{run_id}"
+            )
+
+        if (
+            info.status
+            == RecoveryStatus.COMPLETED
+        ):
+            raise CheckpointError(
+                "Completed workflow cannot "
+                "be resumed: "
+                f"{run_id}"
+            )
+
+        if (
+            info.status
+            == RecoveryStatus.FAILED
+            and not allow_failed
+        ):
+            raise CheckpointError(
+                "Workflow is marked failed. "
+                "Pass allow_failed=True to "
+                "retry from its latest state."
+            )
+
+        state = (
+            self.checkpoint_service
+            .restore_state(
+                run_id
+            )
+        )
+
+        if state is None:
+            raise CheckpointError(
+                "Could not restore workflow "
+                f"state for run: {run_id}"
+            )
+
+        latest = (
+            self.checkpoint_service
+            .latest_checkpoint(
+                run_id
+            )
+        )
+
+        if (
+            info.status
+            == RecoveryStatus.FAILED
+            and allow_failed
+        ):
+            state.failed = False
+            state.completed = False
+
+            for task in (
+                state.tasks.values()
+            ):
+                if (
+                    task.status
+                    == TaskStatus.FAILED
+                ):
+                    task.status = (
+                        TaskStatus.PENDING
+                    )
+
+        state.metadata[
+            "recovered_from_checkpoint"
+        ] = {
+            "checkpoint_id": (
+                latest.id
+                if latest is not None
+                else None
+            ),
+            "sequence": (
+                latest.sequence
+                if latest is not None
+                else None
+            ),
+            "checkpoint_type": (
+                latest.checkpoint_type.value
+                if latest is not None
+                else None
+            ),
+        }
+
+        return state
+
+    def resume_run(
+        self,
+        run_id: str,
+        *,
+        allow_failed: bool = False,
+    ) -> NexusState:
+        """
+        Restore and continue a persisted
+        NEXUS workflow.
+        """
+
+        state = self.restore_run(
+            run_id,
+            allow_failed=allow_failed,
+        )
+
+        return self.run(
+            state
+        )
+
     def run(
         self,
         state: NexusState,
     ) -> NexusState:
         collector = self._start_trace(
+            state
+        )
+
+        self._checkpoint_started(
             state
         )
 
@@ -694,6 +961,11 @@ class NexusEngine:
                                 collector
                             )
 
+                        self._checkpoint_task_completed(
+                            state,
+                            task.id,
+                        )
+
                     except Exception as exc:
                         state.failed = True
 
@@ -724,6 +996,10 @@ class NexusEngine:
                 self._maybe_replan(
                     state,
                     collector=collector,
+                )
+
+                self._checkpoint_iteration_completed(
+                    state
                 )
 
             state.completed = True
@@ -765,6 +1041,10 @@ class NexusEngine:
                         trace.artifact_count,
                 }
 
+            self._checkpoint_completed(
+                state
+            )
+
             return state
 
         except Exception as exc:
@@ -777,5 +1057,12 @@ class NexusEngine:
                     collector,
                     str(exc),
                 )
+
+            self._checkpoint_failed(
+                state,
+                reason=str(
+                    exc
+                ),
+            )
 
             raise
