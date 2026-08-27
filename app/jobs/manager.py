@@ -4,6 +4,13 @@ from app.core.state import (
     NexusState,
 )
 
+from app.governance.models import (
+    ResourceUsage,
+)
+from app.governance.service import (
+    GovernanceService,
+)
+
 from app.jobs.models import (
     JobExecutionResult,
     JobNotFoundError,
@@ -33,15 +40,23 @@ class JobManager:
     - inspect job status
     - cancel queued jobs
     - retry failed jobs
+    - enforce workflow governance
     """
 
     def __init__(
         self,
         queue: PriorityJobQueue,
         worker: WorkflowWorker,
+        governance_service: Optional[
+            GovernanceService
+        ] = None,
     ):
         self.queue = queue
         self.worker = worker
+
+        self.governance_service = (
+            governance_service
+        )
 
         self._jobs: dict[
             str,
@@ -179,6 +194,70 @@ class JobManager:
             terminal=terminal,
         )
 
+    def _usage_for(
+        self,
+        state: NexusState,
+    ) -> ResourceUsage:
+        return ResourceUsage(
+            tasks=len(
+                state.tasks
+            ),
+            replans=int(
+                state.metadata.get(
+                    "replan_count",
+                    0,
+                )
+            ),
+            repairs=int(
+                state.metadata.get(
+                    "repair_count",
+                    0,
+                )
+            ),
+        )
+
+    def _acquire_governance(
+        self,
+        state: NexusState,
+    ) -> None:
+        if (
+            self.governance_service
+            is None
+        ):
+            return
+
+        self.governance_service.acquire(
+            action="workflow.run",
+            subject=state.run_id,
+            usage=(
+                self._usage_for(
+                    state
+                )
+            ),
+            context={
+                "run_id":
+                    state.run_id,
+                "task_count":
+                    len(
+                        state.tasks
+                    ),
+            },
+        )
+
+    def _release_governance(
+        self,
+        state: NexusState,
+    ) -> None:
+        if (
+            self.governance_service
+            is None
+        ):
+            return
+
+        self.governance_service.release(
+            state.run_id
+        )
+
     def execute_next(
         self,
     ) -> Optional[
@@ -193,12 +272,22 @@ class JobManager:
             job.id
         )
 
-        result = (
-            self.worker.execute(
-                job,
-                state,
-            )
+        self._acquire_governance(
+            state
         )
+
+        try:
+            result = (
+                self.worker.execute(
+                    job,
+                    state,
+                )
+            )
+
+        finally:
+            self._release_governance(
+                state
+            )
 
         self._results[
             job.id
@@ -234,12 +323,22 @@ class JobManager:
             job_id
         )
 
-        result = (
-            self.worker.execute(
-                job,
-                state,
-            )
+        self._acquire_governance(
+            state
         )
+
+        try:
+            result = (
+                self.worker.execute(
+                    job,
+                    state,
+                )
+            )
+
+        finally:
+            self._release_governance(
+                state
+            )
 
         self._results[
             job.id

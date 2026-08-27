@@ -40,6 +40,26 @@ from app.evaluation.service import (
     EvaluationService,
 )
 
+from app.governance.budget import (
+    ResourceBudgetGuard,
+)
+from app.governance.limits import (
+    ConcurrencyGuard,
+    RateLimitConfig,
+    SlidingWindowRateLimiter,
+)
+from app.governance.models import (
+    PolicyEffect,
+    PolicyRule,
+    ResourceBudget,
+)
+from app.governance.policy import (
+    PolicyEngine,
+)
+from app.governance.service import (
+    GovernanceService,
+)
+
 from app.memory.manager import MemoryManager
 from app.memory.retriever import MemoryRetriever
 from app.memory.store import MemoryStore
@@ -82,8 +102,26 @@ DEFAULT_CHECKPOINT_DB_PATH = (
 )
 
 DEFAULT_COMMAND_TIMEOUT = 20
+
 DEFAULT_MAX_REPAIRS = 2
+
 DEFAULT_MAX_REPLANS = 3
+
+DEFAULT_MAX_LLM_CALLS = 50
+
+DEFAULT_MAX_TOOL_CALLS = 25
+
+DEFAULT_MAX_TASKS = 50
+
+DEFAULT_GOVERNANCE_RATE_REQUESTS = 20
+
+DEFAULT_GOVERNANCE_RATE_WINDOW = (
+    60.0
+)
+
+DEFAULT_MAX_CONCURRENT = 4
+
+DEFAULT_MAX_CONCURRENT_PER_RUN = 1
 
 
 def build_default_registry(
@@ -239,6 +277,128 @@ def build_approval_gate(
     )
 
 
+def build_governance_service(
+    *,
+    max_llm_calls: int = (
+        DEFAULT_MAX_LLM_CALLS
+    ),
+    max_tool_calls: int = (
+        DEFAULT_MAX_TOOL_CALLS
+    ),
+    max_tasks: int = (
+        DEFAULT_MAX_TASKS
+    ),
+    max_replans: int = (
+        DEFAULT_MAX_REPLANS
+    ),
+    max_repairs: int = (
+        DEFAULT_MAX_REPAIRS
+    ),
+    rate_requests: int = (
+        DEFAULT_GOVERNANCE_RATE_REQUESTS
+    ),
+    rate_window_seconds: float = (
+        DEFAULT_GOVERNANCE_RATE_WINDOW
+    ),
+    max_concurrent: int = (
+        DEFAULT_MAX_CONCURRENT
+    ),
+    max_concurrent_per_run: int = (
+        DEFAULT_MAX_CONCURRENT_PER_RUN
+    ),
+) -> GovernanceService:
+    """
+    Build the shared production governance
+    layer used by NEXUS execution systems.
+    """
+
+    policy_engine = PolicyEngine(
+        rules=[
+            PolicyRule(
+                id="deny-destructive-shell",
+                action="tool.shell.delete",
+                effect=(
+                    PolicyEffect.DENY
+                ),
+                reason=(
+                    "Destructive shell "
+                    "execution is prohibited."
+                ),
+            ),
+            PolicyRule(
+                id="approve-high-risk-tools",
+                action="tool.high_risk.*",
+                effect=(
+                    PolicyEffect
+                    .REQUIRE_APPROVAL
+                ),
+                reason=(
+                    "High-risk tool execution "
+                    "requires human approval."
+                ),
+            ),
+        ],
+        default_effect=(
+            PolicyEffect.ALLOW
+        ),
+    )
+
+    budget_guard = (
+        ResourceBudgetGuard(
+            ResourceBudget(
+                max_llm_calls=(
+                    max_llm_calls
+                ),
+                max_tool_calls=(
+                    max_tool_calls
+                ),
+                max_tasks=(
+                    max_tasks
+                ),
+                max_replans=(
+                    max_replans
+                ),
+                max_repairs=(
+                    max_repairs
+                ),
+            )
+        )
+    )
+
+    rate_limiter = (
+        SlidingWindowRateLimiter(
+            RateLimitConfig(
+                max_requests=(
+                    rate_requests
+                ),
+                window_seconds=(
+                    rate_window_seconds
+                ),
+            )
+        )
+    )
+
+    concurrency_guard = (
+        ConcurrencyGuard(
+            max_concurrent=(
+                max_concurrent
+            ),
+            max_per_subject=(
+                max_concurrent_per_run
+            ),
+        )
+    )
+
+    return GovernanceService(
+        policy_engine=policy_engine,
+        budget_guard=budget_guard,
+        rate_limiter=rate_limiter,
+        concurrency_guard=(
+            concurrency_guard
+        ),
+    )
+
+
 def build_tool_registry(
     workspace_root: str = (
         DEFAULT_WORKSPACE_ROOT
@@ -258,6 +418,9 @@ def build_tool_runtime(
     approval_gate: Optional[
         ApprovalGate
     ] = None,
+    governance_service: Optional[
+        GovernanceService
+    ] = None,
 ) -> ToolRuntime:
     selector = ToolSelector(
         registry=tool_registry
@@ -271,6 +434,9 @@ def build_tool_runtime(
         selector=selector,
         executor=executor,
         approval_gate=approval_gate,
+        governance_service=(
+            governance_service
+        ),
     )
 
 
@@ -327,8 +493,10 @@ def build_checkpoint_service(
         DEFAULT_CHECKPOINT_DB_PATH
     ),
 ) -> CheckpointService:
-    checkpoint_store = CheckpointStore(
-        db_path=checkpoint_db_path
+    checkpoint_store = (
+        CheckpointStore(
+            db_path=checkpoint_db_path
+        )
     )
 
     return CheckpointService(
@@ -369,6 +537,7 @@ def build_nexus_engine(
     enable_observability: bool = True,
     enable_approvals: bool = True,
     enable_checkpointing: bool = True,
+    enable_governance: bool = True,
     require_medium_risk_approval: bool = False,
     auto_create_evaluation_baseline: bool = True,
 ) -> NexusEngine:
@@ -380,8 +549,12 @@ def build_nexus_engine(
     memory_retriever = None
 
     if enable_memory:
-        memory_manager = build_memory_manager(
-            memory_db_path=memory_db_path
+        memory_manager = (
+            build_memory_manager(
+                memory_db_path=(
+                    memory_db_path
+                )
+            )
         )
 
         memory_retriever = (
@@ -401,7 +574,9 @@ def build_nexus_engine(
             workspace_root=workspace_root,
             command_timeout=command_timeout,
             max_repairs=max_repairs,
-            memory_retriever=memory_retriever,
+            memory_retriever=(
+                memory_retriever
+            ),
         )
 
     # ---------------------------------
@@ -412,8 +587,13 @@ def build_nexus_engine(
     plan_mutator = None
 
     if enable_replanning:
-        replanner = build_replanner()
-        plan_mutator = build_plan_mutator()
+        replanner = (
+            build_replanner()
+        )
+
+        plan_mutator = (
+            build_plan_mutator()
+        )
 
     # ---------------------------------
     # Human approval
@@ -438,6 +618,20 @@ def build_nexus_engine(
         )
 
     # ---------------------------------
+    # Production governance
+    # ---------------------------------
+
+    governance_service = None
+
+    if enable_governance:
+        governance_service = (
+            build_governance_service(
+                max_replans=max_replans,
+                max_repairs=max_repairs,
+            )
+        )
+
+    # ---------------------------------
     # Tool intelligence
     # ---------------------------------
 
@@ -447,15 +641,24 @@ def build_nexus_engine(
     if enable_tools:
         tool_registry = (
             build_tool_registry(
-                workspace_root=workspace_root,
-                memory_retriever=memory_retriever,
+                workspace_root=(
+                    workspace_root
+                ),
+                memory_retriever=(
+                    memory_retriever
+                ),
             )
         )
 
         tool_runtime = (
             build_tool_runtime(
                 tool_registry,
-                approval_gate=approval_gate,
+                approval_gate=(
+                    approval_gate
+                ),
+                governance_service=(
+                    governance_service
+                ),
             )
         )
 
@@ -486,7 +689,9 @@ def build_nexus_engine(
     if enable_observability:
         observability_service = (
             build_observability_service(
-                trace_db_path=trace_db_path
+                trace_db_path=(
+                    trace_db_path
+                )
             )
         )
 
@@ -510,7 +715,9 @@ def build_nexus_engine(
     # ---------------------------------
 
     registry = build_default_registry(
-        memory_retriever=memory_retriever,
+        memory_retriever=(
+            memory_retriever
+        ),
         tool_runtime=tool_runtime,
     )
 
@@ -521,7 +728,9 @@ def build_nexus_engine(
     engine = NexusEngine(
         registry=registry,
         repair_loop=repair_loop,
-        memory_manager=memory_manager,
+        memory_manager=(
+            memory_manager
+        ),
         replanner=replanner,
         plan_mutator=plan_mutator,
         max_replans=max_replans,
@@ -535,6 +744,11 @@ def build_nexus_engine(
             checkpoint_service
         ),
     )
+
+    # ---------------------------------
+    # Expose optional production
+    # subsystems on the engine.
+    # ---------------------------------
 
     engine.tool_registry = (
         tool_registry
@@ -550,6 +764,10 @@ def build_nexus_engine(
 
     engine.approval_gate = (
         approval_gate
+    )
+
+    engine.governance_service = (
+        governance_service
     )
 
     return engine

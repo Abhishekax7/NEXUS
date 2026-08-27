@@ -26,6 +26,10 @@ def build_job_manager(
     """
     Build the production asynchronous
     job subsystem for NEXUS.
+
+    The JobManager shares the same
+    GovernanceService instance exposed
+    by the production NexusEngine.
     """
 
     queue = PriorityJobQueue()
@@ -37,6 +41,13 @@ def build_job_manager(
     return JobManager(
         queue=queue,
         worker=worker,
+        governance_service=(
+            getattr(
+                engine,
+                "governance_service",
+                None,
+            )
+        ),
     )
 
 
@@ -47,6 +58,7 @@ def build_production_app():
 
     Includes:
     - NexusEngine
+    - governance
     - async job queue
     - workflow worker
     - job manager

@@ -12,6 +12,15 @@ from app.approval.models import (
     ApprovalRisk,
 )
 
+from app.governance.models import (
+    PolicyEffect,
+    ResourceUsage,
+)
+from app.governance.service import (
+    GovernanceDecision,
+    GovernanceService,
+)
+
 from app.tools.contracts import (
     ToolExecutionRequest,
     ToolExecutionResult,
@@ -58,6 +67,10 @@ class ToolRuntimeResult:
         bool
     ] = None
 
+    governance: Optional[
+        GovernanceDecision
+    ] = None
+
     @property
     def tool_used(
         self,
@@ -98,11 +111,14 @@ class ToolRuntime:
     Coordinates:
 
     - AI tool selection
+    - governance policy enforcement
     - capability risk inspection
-    - approval policy enforcement
+    - human approval enforcement
+    - rate/concurrency governance
     - validated tool execution
 
-    Approval happens BEFORE execution.
+    Governance and approval both happen
+    BEFORE actual tool execution.
     """
 
     def __init__(
@@ -112,13 +128,19 @@ class ToolRuntime:
         approval_gate: Optional[
             ApprovalGate
         ] = None,
+        governance_service: Optional[
+            GovernanceService
+        ] = None,
     ):
         self.selector = selector
-
         self.executor = executor
 
         self.approval_gate = (
             approval_gate
+        )
+
+        self.governance_service = (
+            governance_service
         )
 
         self._pending: dict[
@@ -126,6 +148,8 @@ class ToolRuntime:
             tuple[
                 ToolSelectionDecision,
                 ToolExecutionRequest,
+                str,
+                Optional[str],
             ],
         ] = {}
 
@@ -183,6 +207,74 @@ class ToolRuntime:
                 f"{capability.risk_level}"
             ) from exc
 
+    def _governance_action(
+        self,
+        request: ToolExecutionRequest,
+    ) -> str:
+        return (
+            f"tool.{request.tool_name}"
+        )
+
+    def _evaluate_governance(
+        self,
+        *,
+        request: ToolExecutionRequest,
+        run_id: str,
+        requested_by: Optional[
+            str
+        ],
+    ) -> Optional[
+        GovernanceDecision
+    ]:
+        if (
+            self.governance_service
+            is None
+        ):
+            return None
+
+        context = {
+            "run_id": run_id,
+            "tool_name":
+                request.tool_name,
+            "requested_by":
+                requested_by,
+            "arguments":
+                dict(
+                    request.arguments
+                ),
+        }
+
+        decision = (
+            self.governance_service
+            .evaluate(
+                action=(
+                    self._governance_action(
+                        request
+                    )
+                ),
+                subject=run_id,
+                usage=ResourceUsage(
+                    tool_calls=1
+                ),
+                context=context,
+            )
+        )
+
+        if (
+            decision.policy.effect
+            == PolicyEffect.DENY
+        ):
+            self.governance_service \
+                .policy_engine \
+                .enforce(
+                    self._governance_action(
+                        request
+                    ),
+                    context=context,
+                )
+
+        return decision
+
     def _request_approval(
         self,
         *,
@@ -191,8 +283,23 @@ class ToolRuntime:
         requested_by: Optional[
             str
         ],
+        governance: Optional[
+            GovernanceDecision
+        ] = None,
     ):
         if self.approval_gate is None:
+            if (
+                governance is not None
+                and governance
+                .requires_approval
+            ):
+                raise ToolRuntimeError(
+                    "Governance policy requires "
+                    "human approval but the "
+                    "approval gate is not "
+                    "configured."
+                )
+
             return None
 
         capability = (
@@ -206,6 +313,47 @@ class ToolRuntime:
         risk = self._approval_risk_for(
             request.tool_name
         )
+
+        governance_requires_approval = (
+            governance is not None
+            and governance
+            .requires_approval
+        )
+
+        # A governance REQUIRE_APPROVAL
+        # decision must never be bypassed by
+        # a low-risk tool configuration.
+        if governance_requires_approval:
+            risk = ApprovalRisk.HIGH
+
+        metadata = {
+            "tool_category":
+                capability.category.value,
+
+            "tool_risk_level":
+                capability.risk_level.value,
+
+            "governance_requires_approval":
+                governance_requires_approval,
+        }
+
+        if governance is not None:
+            metadata[
+                "governance_policy_effect"
+            ] = (
+                governance
+                .policy
+                .effect
+                .value
+            )
+
+            metadata[
+                "governance_rule_id"
+            ] = (
+                governance
+                .policy
+                .matched_rule_id
+            )
 
         return (
             self.approval_gate
@@ -226,6 +374,7 @@ class ToolRuntime:
                 proposed_action={
                     "tool_name":
                         request.tool_name,
+
                     "arguments":
                         dict(
                             request.arguments
@@ -235,18 +384,61 @@ class ToolRuntime:
                 requested_by=(
                     requested_by
                 ),
-                metadata={
-                    "tool_category":
-                        capability
-                        .category
-                        .value,
-                    "tool_risk_level":
-                        capability
-                        .risk_level
-                        .value,
-                },
+                metadata=metadata,
             )
         )
+
+    def _execute_governed(
+        self,
+        *,
+        request: ToolExecutionRequest,
+        run_id: str,
+        requested_by: Optional[
+            str
+        ],
+    ) -> ToolExecutionResult:
+        if (
+            self.governance_service
+            is None
+        ):
+            return self.executor.execute(
+                request
+            )
+
+        context = {
+            "run_id": run_id,
+            "tool_name":
+                request.tool_name,
+            "requested_by":
+                requested_by,
+            "arguments":
+                dict(
+                    request.arguments
+                ),
+        }
+
+        self.governance_service.acquire(
+            action=(
+                self._governance_action(
+                    request
+                )
+            ),
+            subject=run_id,
+            usage=ResourceUsage(
+                tool_calls=1
+            ),
+            context=context,
+        )
+
+        try:
+            return self.executor.execute(
+                request
+            )
+
+        finally:
+            self.governance_service.release(
+                run_id
+            )
 
     def run(
         self,
@@ -284,6 +476,7 @@ class ToolRuntime:
                 execution=None,
                 approval_request=None,
                 approval_granted=None,
+                governance=None,
             )
 
         if run_id is None:
@@ -296,6 +489,7 @@ class ToolRuntime:
                         "run_id"
                     )
                 )
+
             else:
                 context_run_id = None
 
@@ -304,11 +498,20 @@ class ToolRuntime:
                 or "tool-runtime"
             )
 
+        governance = (
+            self._evaluate_governance(
+                request=request,
+                run_id=run_id,
+                requested_by=requested_by,
+            )
+        )
+
         approval_result = (
             self._request_approval(
                 request=request,
                 run_id=run_id,
                 requested_by=requested_by,
+                governance=governance,
             )
         )
 
@@ -325,6 +528,8 @@ class ToolRuntime:
             ] = (
                 decision,
                 request,
+                run_id,
+                requested_by,
             )
 
             return ToolRuntimeResult(
@@ -335,11 +540,14 @@ class ToolRuntime:
                     approval_request
                 ),
                 approval_granted=False,
+                governance=governance,
             )
 
         execution = (
-            self.executor.execute(
-                request
+            self._execute_governed(
+                request=request,
+                run_id=run_id,
+                requested_by=requested_by,
             )
         )
 
@@ -359,6 +567,7 @@ class ToolRuntime:
                 is not None
                 else None
             ),
+            governance=governance,
         )
 
     def resume(
@@ -382,7 +591,12 @@ class ToolRuntime:
                 f"{approval_request_id}"
             )
 
-        decision, request = pending
+        (
+            decision,
+            request,
+            run_id,
+            requested_by,
+        ) = pending
 
         try:
             approval = (
@@ -402,9 +616,19 @@ class ToolRuntime:
 
             raise
 
+        governance = (
+            self._evaluate_governance(
+                request=request,
+                run_id=run_id,
+                requested_by=requested_by,
+            )
+        )
+
         execution = (
-            self.executor.execute(
-                request
+            self._execute_governed(
+                request=request,
+                run_id=run_id,
+                requested_by=requested_by,
             )
         )
 
@@ -420,6 +644,7 @@ class ToolRuntime:
                 approval.request
             ),
             approval_granted=True,
+            governance=governance,
         )
 
     def pending_approval_ids(
