@@ -359,3 +359,73 @@ def test_max_tokens_is_forwarded(
         ]
         == 3000
     )
+def test_json_validation_failure_falls_back(
+    monkeypatch,
+):
+    calls = []
+
+    class FakeJsonValidationError(
+        Exception
+    ):
+        status_code = 400
+
+    class FakeCompletions:
+        def create(
+            self,
+            **kwargs,
+        ):
+            calls.append(
+                dict(kwargs)
+            )
+
+            if len(calls) == 1:
+                raise FakeJsonValidationError(
+                    "Error code: 400 - "
+                    "json_validate_failed: "
+                    "Failed to validate JSON."
+                )
+
+            return fake_response(
+                '{"status":"ok"}'
+            )
+
+    fake_groq = (
+        SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=(
+                    FakeCompletions()
+                )
+            )
+        )
+    )
+
+    monkeypatch.setattr(
+        "app.core.llm.Groq",
+        lambda **kwargs:
+            fake_groq,
+    )
+
+    client = LLMClient()
+
+    result = client.generate(
+        "system",
+        "Return JSON.",
+        json_mode=True,
+    )
+
+    assert (
+        result
+        == '{"status":"ok"}'
+    )
+
+    assert len(calls) == 2
+
+    assert (
+        "response_format"
+        in calls[0]
+    )
+
+    assert (
+        "response_format"
+        not in calls[1]
+    )

@@ -28,10 +28,12 @@ class LLMClient:
     Shared Groq LLM client for NEXUS.
 
     Features:
-    - normal text generation
-    - JSON response mode
+    - text generation
+    - optional provider JSON mode
+    - application-side structured validation
     - automatic rate-limit recovery
     - exponential retry backoff
+    - provider JSON-mode fallback
     - finite retry budget
     - optional completion-token control
     """
@@ -86,11 +88,6 @@ class LLMClient:
         self,
         exc: Exception,
     ) -> Optional[int]:
-        """
-        Extract an HTTP status code when
-        provided by the Groq SDK.
-        """
-
         status_code = getattr(
             exc,
             "status_code",
@@ -150,6 +147,54 @@ class LLMClient:
             in message
         )
 
+    def _is_json_validation_error(
+        self,
+        exc: Exception,
+    ) -> bool:
+        """
+        Detect provider-side failures where
+        Groq cannot satisfy JSON response
+        formatting before returning content.
+
+        NEXUS can safely fall back to plain
+        completion because agents perform
+        their own JSON + Pydantic validation.
+        """
+
+        status_code = (
+            self._status_code_for(
+                exc
+            )
+        )
+
+        message = str(
+            exc
+        ).lower()
+
+        if (
+            "json_validate_failed"
+            in message
+        ):
+            return True
+
+        if (
+            status_code == 400
+            and
+            "failed to validate json"
+            in message
+        ):
+            return True
+
+        if (
+            status_code == 400
+            and
+            "failed to generate json"
+            in message
+        ):
+            return True
+
+        return False
+
     def _retry_after_from_headers(
         self,
         exc: Exception,
@@ -204,24 +249,20 @@ class LLMClient:
         self,
         exc: Exception,
     ) -> Optional[float]:
-        """
-        Groq rate-limit messages commonly
-        include text such as:
-
-        'Please try again in 7.1925s.'
-        """
-
         message = str(
             exc
         )
 
         patterns = [
-            r"try again in\s+"
-            r"([0-9]+(?:\.[0-9]+)?)s",
-
-            r"retry after\s+"
-            r"([0-9]+(?:\.[0-9]+)?)"
-            r"\s*seconds?",
+            (
+                r"try again in\s+"
+                r"([0-9]+(?:\.[0-9]+)?)s"
+            ),
+            (
+                r"retry after\s+"
+                r"([0-9]+(?:\.[0-9]+)?)"
+                r"\s*seconds?"
+            ),
         ]
 
         for pattern in patterns:
@@ -290,12 +331,22 @@ class LLMClient:
         kwargs: dict,
     ):
         """
-        Execute one completion request
-        with bounded automatic recovery
-        from provider rate limiting.
+        Execute a completion request.
+
+        Recovery strategies:
+
+        1. Retry provider rate limits.
+
+        2. If Groq provider-side JSON
+           formatting fails, retry once
+           without response_format.
+
+           Agent-level JSON/Pydantic
+           validation remains active.
         """
 
         attempt = 0
+        json_fallback_used = False
 
         while True:
             try:
@@ -309,6 +360,38 @@ class LLMClient:
                 )
 
             except Exception as exc:
+                if (
+                    self._is_json_validation_error(
+                        exc
+                    )
+                    and
+                    "response_format"
+                    in kwargs
+                    and
+                    not json_fallback_used
+                ):
+                    kwargs = dict(
+                        kwargs
+                    )
+
+                    kwargs.pop(
+                        "response_format",
+                        None,
+                    )
+
+                    json_fallback_used = True
+
+                    print(
+                        "\n"
+                        "[NEXUS LLM] "
+                        "Provider JSON validation "
+                        "failed. Retrying with "
+                        "NEXUS-side structured "
+                        "validation..."
+                    )
+
+                    continue
+
                 if not self._is_rate_limit_error(
                     exc
                 ):
@@ -354,7 +437,9 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
-        max_tokens: Optional[int] = None,
+        max_tokens: Optional[
+            int
+        ] = None,
     ) -> str:
         kwargs = {
             "model":
@@ -362,18 +447,23 @@ class LLMClient:
 
             "messages": [
                 {
-                    "role": "system",
+                    "role":
+                        "system",
+
                     "content":
                         system_prompt,
                 },
                 {
-                    "role": "user",
+                    "role":
+                        "user",
+
                     "content":
                         user_prompt,
                 },
             ],
 
-            "temperature": 0.1,
+            "temperature":
+                0.1,
         }
 
         if max_tokens is not None:
