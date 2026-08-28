@@ -29,6 +29,11 @@ class CapturingLLM:
         system_prompt,
         user_prompt,
         json_mode=False,
+        max_tokens=None,
+        json_schema=None,
+        Schema_name="nexus_structured_output",
+        strict_schema=True,
+        reasoning_effort=None,
     ):
         self.last_user_prompt = user_prompt
         return self.response

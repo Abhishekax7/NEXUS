@@ -1,11 +1,7 @@
 import json
 from typing import Optional
 
-from pydantic import (
-    BaseModel,
-    Field,
-    ValidationError,
-)
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.agents.base import BaseAgent
 from app.core.llm import LLMClient
@@ -19,54 +15,27 @@ from app.core.state import NexusState
 
 
 class GeneratedFile(BaseModel):
-    path: str = Field(
-        min_length=1
-    )
+    model_config = ConfigDict(extra="forbid")
 
-    content: str = Field(
-        min_length=1
-    )
-
-    purpose: str = Field(
-        min_length=1
-    )
+    path: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    purpose: str = Field(min_length=1)
 
 
 class CodeBundle(BaseModel):
-    project_name: str = Field(
-        min_length=1
-    )
+    model_config = ConfigDict(extra="forbid")
 
-    summary: str = Field(
-        min_length=1
-    )
-
-    files: list[GeneratedFile] = Field(
-        min_length=1
-    )
-
-    dependencies: list[str] = Field(
-        min_length=1
-    )
-
-    run_commands: list[str] = Field(
-        min_length=1
-    )
-
-    test_commands: list[str] = Field(
-        min_length=1
-    )
-
-    implementation_notes: list[str] = Field(
-        min_length=1
-    )
+    project_name: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    files: list[GeneratedFile] = Field(min_length=1)
+    dependencies: list[str] = Field(min_length=1)
+    run_commands: list[str] = Field(min_length=1)
+    test_commands: list[str] = Field(min_length=1)
+    implementation_notes: list[str] = Field(min_length=1)
 
 
 class CodeGenerationError(Exception):
-    """
-    Raised when generated code
-    cannot be validated.
-    """
+    """Raised when generated code cannot be validated."""
 
 
 class CoderAgent(BaseAgent):
@@ -74,79 +43,53 @@ class CoderAgent(BaseAgent):
 
     def __init__(
         self,
-        llm_client: Optional[
-            LLMClient
-        ] = None,
+        llm_client: Optional[LLMClient] = None,
         max_validation_retries: int = 2,
         max_tokens: int = 3500,
     ):
-        self.llm = (
-            llm_client
-            or LLMClient()
-        )
-
-        self.max_validation_retries = (
-            max_validation_retries
-        )
-
-        self.max_tokens = (
-            max_tokens
-        )
+        self.llm = llm_client or LLMClient()
+        self.max_validation_retries = max_validation_retries
+        self.max_tokens = max_tokens
 
     def _get_architecture(
         self,
         task: AgentTask,
         state: NexusState,
-    ) -> dict:
-        for artifact_id in (
-            task.input_artifact_ids
-        ):
-            artifact = (
-                state.artifacts.get(
-                    artifact_id
-                )
+    ) -> Artifact:
+        for artifact_id in task.input_artifact_ids:
+            artifact = state.get_artifact(
+                artifact_id
             )
 
             if (
-                artifact
+                artifact is not None
                 and artifact.type
                 == ArtifactType.ARCHITECTURE
             ):
-                return (
-                    artifact.content
-                )
+                return artifact
 
-        for artifact in (
-            state.artifacts.values()
-        ):
+        for artifact in state.artifacts.values():
             if (
                 artifact.type
                 == ArtifactType.ARCHITECTURE
             ):
-                return (
-                    artifact.content
-                )
+                return artifact
 
         raise CodeGenerationError(
-            "Architecture artifact "
-            "not found."
+            "Architecture artifact not found "
+            "for coder task."
         )
 
     def _get_optional_artifact(
         self,
         state: NexusState,
         artifact_type: ArtifactType,
-    ) -> Optional[dict]:
-        for artifact in (
-            state.artifacts.values()
+    ) -> Optional[Artifact]:
+        for artifact in reversed(
+           list(state.artifacts.values())
         ):
-            if (
-                artifact.type
-                == artifact_type
-            ):
-                return (
-                    artifact.content
-                )
+            if artifact.type == artifact_type:
+                return artifact
 
         return None
 
@@ -154,65 +97,75 @@ class CoderAgent(BaseAgent):
         self,
         raw_output: str,
     ) -> CodeBundle:
-        parsed = json.loads(
-            raw_output
-        )
-
-        return (
-            CodeBundle.model_validate(
-                parsed
+        if not raw_output:
+            raise CodeGenerationError(
+                "Coder received an empty "
+                "LLM response."
             )
-        )
+
+        try:
+            parsed = json.loads(
+                raw_output
+            )
+
+            bundle = (
+                CodeBundle.model_validate(
+                    parsed
+                )
+            )
+
+            self._validate_file_paths(
+                bundle
+            )
+
+            return bundle
+
+        except (
+            json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise CodeGenerationError(
+                str(exc)
+            ) from exc
 
     def _validate_file_paths(
         self,
         bundle: CodeBundle,
     ) -> None:
-        seen_paths = set()
+        seen_paths: set[str] = set()
 
-        for generated_file in (
-            bundle.files
-        ):
-            path = (
-                generated_file.path
-            )
+        for generated_file in bundle.files:
+            path = generated_file.path.strip()
 
             if path.startswith(
-                "/"
+                ("/", "\\")
             ):
-                raise (
-                    CodeGenerationError(
-                        "Absolute file path "
-                        "is not allowed: "
-                        f"{path}"
-                    )
+                raise ValueError(
+                    "Absolute file path "
+                    f"is not allowed: {path}"
                 )
 
-            if (
-                ".."
-                in path.split("/")
-            ):
-                raise (
-                    CodeGenerationError(
-                        "Parent directory "
-                        "traversal is not "
-                        "allowed: "
-                        f"{path}"
-                    )
+            normalized_parts = (
+                path.replace(
+                    "\\",
+                    "/",
+                ).split("/")
+            )
+
+            if ".." in normalized_parts:
+                raise ValueError(
+                    "Parent directory traversal "
+                    f"is not allowed: {path}"
                 )
 
             if path in seen_paths:
-                raise (
-                    CodeGenerationError(
-                        "Duplicate generated "
-                        "file path: "
-                        f"{path}"
-                    )
+                raise ValueError(
+                    "Duplicate generated "
+                    f"file path: {path}"
                 )
 
-            seen_paths.add(
-                path
-            )
+            seen_paths.add(path)
 
     def execute(
         self,
@@ -240,124 +193,206 @@ class CoderAgent(BaseAgent):
             )
         )
 
-        system_prompt = (
-            "You are the Coder Agent "
-            "inside NEXUS, an autonomous "
-            "AI software engineering "
-            "system. Generate coherent, "
-            "runnable, modular software "
-            "from validated architecture. "
-            "Return machine-valid JSON "
-            "only."
+        architecture_json = (
+            json.dumps(
+                architecture.content,
+                indent=2,
+                default=str,
+            )
         )
+
+        requirements_json = (
+            json.dumps(
+                requirements.content,
+                indent=2,
+                default=str,
+            )
+            if requirements
+            else "Not available"
+        )
+
+        research_json = (
+            json.dumps(
+                research.content,
+                indent=2,
+                default=str,
+            )
+            if research
+            else "Not available"
+        )
+
+        system_prompt = """
+You are the Coder Agent inside NEXUS,
+an autonomous AI engineering system.
+
+Your responsibility is to convert an
+approved architecture into a compact,
+runnable implementation.
+
+Generate implementation code only from
+the supplied requirements, research,
+architecture, and task context.
+
+The result must satisfy the structured
+CodeBundle schema supplied by the runtime.
+
+Prioritize correctness, security,
+maintainability, and runnable code.
+
+Do not include markdown code fences.
+Do not include prose outside the
+structured response.
+""".strip()
 
         prompt = f"""
 USER REQUEST:
-
 {state.user_request}
 
-VALIDATED REQUIREMENTS:
+CODER TASK:
+Title: {task.title}
+Description: {task.description}
 
-{json.dumps(
-    requirements,
-    indent=2,
-)}
+REQUIREMENTS:
+{requirements_json}
 
-TECHNICAL RESEARCH:
+RESEARCH:
+{research_json}
 
-{json.dumps(
-    research,
-    indent=2,
-)}
+APPROVED ARCHITECTURE:
+{architecture_json}
 
-VALIDATED ARCHITECTURE:
+Generate a runnable implementation.
 
-{json.dumps(
-    architecture,
-    indent=2,
-)}
+Generation rules:
 
-Generate an initial runnable implementation.
+- Follow the approved architecture.
+- Respect the supplied requirements.
+- Use research only where relevant.
+- Keep the implementation compact and
+  demo-ready.
+- Generate only the minimum files required
+  for a runnable implementation.
+- Prefer 3 to 5 generated files.
+- Include meaningful tests.
+- Include required dependencies.
+- Include commands required to run the
+  implementation.
+- Include commands required to run tests.
+- Avoid verbose comments and documentation.
+- Keep implementation_notes concise.
+- Keep summary concise.
+- Do not generate README files.
+- Do not duplicate information.
+- Prioritize runnable code over explanatory
+  text.
+- Every generated file must use a safe,
+  relative project path.
+- Never use absolute paths.
+- Never use parent-directory traversal.
+- Never duplicate generated file paths.
+""".strip()
 
-Return exactly one JSON object containing:
+        repair_system_prompt = """
+You are the Coder Repair Agent inside
+NEXUS.
 
-project_name
-summary
-files
-dependencies
-run_commands
-test_commands
-implementation_notes
+A previous structured code-generation
+response failed NEXUS validation.
 
-FILES FORMAT:
+Return a corrected CodeBundle only.
 
-files must be an array of objects.
+The result must satisfy the structured
+CodeBundle schema supplied by the runtime.
 
-Every object must contain:
+Do not include markdown fences.
+Do not include prose outside the
+structured response.
+""".strip()
 
-path
-content
-purpose
-
-Rules:
-
-- generate multiple files when appropriate
-- paths must be relative paths
-- never use absolute paths
-- never use ../ directory traversal
-- do not generate duplicate file paths
-- code must be internally consistent
-- imports between generated files must match
-- include dependency declarations
-- include commands required to run the project
-- include commands required to test the project
-- use the architecture as the primary implementation contract
-- respect requirements and technical constraints
-- prefer free/open-source dependencies where required
-- never include API keys, passwords, tokens, or secrets
-- use environment variables for secrets
-- every field is mandatory and non-empty
-- do not wrap source code in markdown fences
-- keep the implementation compact and demo-ready
-- generate only the minimum files required for a runnable implementation
-- prefer 3 to 5 generated files
-- avoid verbose comments and documentation inside generated source files
-- keep implementation_notes concise
-- keep summary concise
-- do not generate README files
-- do not duplicate information between files or notes
-- prioritize runnable code over explanatory text
-- return JSON only
-"""
-
-        last_error = None
+        validation_attempts = 0
+        previous_output = ""
+        previous_error = ""
 
         for attempt in range(
-            self.max_validation_retries
-            + 1
+            self.max_validation_retries + 1
         ):
-            raw_output = (
-                self.llm.generate(
+            validation_attempts = (
+                attempt + 1
+            )
+
+            if attempt == 0:
+                current_system_prompt = (
+                    system_prompt
+                )
+
+                current_prompt = prompt
+
+            else:
+                current_system_prompt = (
+                    repair_system_prompt
+                )
+
+                current_prompt = f"""
+The previous code-generation response
+failed validation.
+
+VALIDATION ERROR:
+{previous_error}
+
+PREVIOUS RESPONSE:
+{previous_output}
+
+Return a corrected runnable implementation.
+
+Repair rules:
+
+- Return only the structured CodeBundle.
+- Keep the repaired implementation compact.
+- Preserve only files required for a
+  runnable solution.
+- Prefer 3 to 5 generated files.
+- Include meaningful tests.
+- Include required dependencies.
+- Include run and test commands.
+- Avoid verbose comments and documentation.
+- Keep summary concise.
+- Keep implementation_notes concise.
+- Do not generate README files.
+- Use only safe relative file paths.
+- Never use parent-directory traversal.
+- Never duplicate generated file paths.
+- Do not use markdown code fences.
+""".strip()
+
+            try:
+                raw_output = self.llm.generate(
                     system_prompt=(
-                        system_prompt
+                        current_system_prompt
                     ),
-                    user_prompt=prompt,
-                    json_mode=True,
+                    user_prompt=(
+                        current_prompt
+                    ),
+                    json_mode=False,
                     max_tokens=(
                         self.max_tokens
                     ),
+                    json_schema=(
+                        CodeBundle
+                        .model_json_schema()
+                    ),
+                    schema_name=(
+                        "nexus_code_bundle"
+                    ),
+                    strict_schema=True,
+                    reasoning_effort="low",
                 )
-            )
 
-            try:
+                previous_output = raw_output
+
                 bundle = (
                     self._validate_output(
                         raw_output
                     )
-                )
-
-                self._validate_file_paths(
-                    bundle
                 )
 
                 return Artifact(
@@ -371,91 +406,37 @@ Rules:
                     created_by=self.role,
                     metadata={
                         "validation_attempts":
-                            attempt + 1,
-
+                            validation_attempts,
                         "file_count":
-                            len(
-                                bundle.files
-                            ),
-
+                            len(bundle.files),
                         "grounded_in_architecture":
                             True,
-
                         "requirements_available":
                             requirements
                             is not None,
-
                         "research_available":
                             research
                             is not None,
+                        "structured_output":
+                            True,
+                        "reasoning_effort":
+                            "low",
                     },
                 )
 
-            except (
-                json.JSONDecodeError,
-                ValidationError,
-                CodeGenerationError,
-            ) as exc:
-                last_error = exc
+            except CodeGenerationError as exc:
+                previous_error = str(exc)
 
-                prompt = f"""
-The previous generated implementation
-failed validation.
-
-ERROR:
-
-{exc}
-
-PREVIOUS RESPONSE:
-
-{raw_output}
-
-CURRENT ARCHITECTURE:
-
-{json.dumps(
-    architecture,
-    indent=2,
-)}
-
-Repair the implementation.
-
-Return exactly one complete JSON object
-containing:
-
-project_name
-summary
-files
-dependencies
-run_commands
-test_commands
-implementation_notes
-
-Every file must contain:
-
-path
-content
-purpose
-
-Rules:
-
-- all fields must be non-empty
-- paths must be relative
-- ../ is forbidden
-- duplicate file paths are forbidden
-- code must remain consistent with the supplied architecture
-- do not include secrets
-- keep the repaired implementation compact
-- preserve only files required for a runnable solution
-- prefer 3 to 5 generated files
-- avoid verbose comments and documentation
-- keep summary and implementation_notes concise
-- do not generate README files
-- do not wrap source code in markdown fences
-- return JSON only
-"""
+                if (
+                    attempt
+                    >= self.max_validation_retries
+                ):
+                    raise CodeGenerationError(
+                        "Code generation could not "
+                        "be validated after retries: "
+                        f"{exc}"
+                    ) from exc
 
         raise CodeGenerationError(
-            "Code generation could not "
-            "be validated after retries: "
-            f"{last_error}"
+            "Code generation failed."
         )

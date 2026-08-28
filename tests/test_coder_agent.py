@@ -22,6 +22,10 @@ class FakeCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         return json.dumps(
             {
@@ -116,6 +120,10 @@ class CapturingCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         self.last_user_prompt = (
             user_prompt
@@ -139,6 +147,10 @@ class RepairingCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         self.calls += 1
 
@@ -170,6 +182,10 @@ class PathTraversalCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
@@ -198,6 +214,10 @@ class AbsolutePathCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
@@ -226,6 +246,10 @@ class DuplicatePathCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         data = json.loads(
             FakeCoderLLM().generate(
@@ -254,6 +278,10 @@ class AlwaysInvalidCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         return "{}"
 
@@ -268,6 +296,10 @@ class TokenCapturingCoderLLM:
         user_prompt: str,
         json_mode: bool = False,
         max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
     ) -> str:
         self.max_tokens = (
             max_tokens

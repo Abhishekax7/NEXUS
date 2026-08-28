@@ -1,6 +1,6 @@
 import re
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from groq import Groq
 
@@ -13,9 +13,7 @@ DEFAULT_MAX_RETRY_DELAY = 60.0
 RATE_LIMIT_BUFFER_SECONDS = 1.0
 
 
-class LLMRetryExhaustedError(
-    RuntimeError
-):
+class LLMRetryExhaustedError(RuntimeError):
     """
     Raised when a transient LLM request
     continues failing after the configured
@@ -28,28 +26,23 @@ class LLMClient:
     Shared Groq LLM client for NEXUS.
 
     Features:
-    - text generation
-    - optional provider JSON mode
-    - application-side structured validation
+    - normal text generation
+    - legacy JSON object mode
+    - strict JSON Schema structured outputs
+    - configurable reasoning effort
+    - completion-token control
     - automatic rate-limit recovery
     - exponential retry backoff
     - provider JSON-mode fallback
-    - finite retry budget
-    - optional completion-token control
+    - application-side validation support
     """
 
     def __init__(
         self,
         *,
-        max_retries: int = (
-            DEFAULT_MAX_RETRIES
-        ),
-        base_retry_delay: float = (
-            DEFAULT_BASE_RETRY_DELAY
-        ),
-        max_retry_delay: float = (
-            DEFAULT_MAX_RETRY_DELAY
-        ),
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        base_retry_delay: float = DEFAULT_BASE_RETRY_DELAY,
+        max_retry_delay: float = DEFAULT_MAX_RETRY_DELAY,
     ):
         if max_retries < 0:
             raise ValueError(
@@ -58,31 +51,21 @@ class LLMClient:
 
         if base_retry_delay < 0:
             raise ValueError(
-                "base_retry_delay cannot "
-                "be negative."
+                "base_retry_delay cannot be negative."
             )
 
         if max_retry_delay <= 0:
             raise ValueError(
-                "max_retry_delay must be "
-                "greater than zero."
+                "max_retry_delay must be greater than zero."
             )
 
         self.client = Groq(
             api_key=settings.groq_api_key
         )
 
-        self.max_retries = (
-            max_retries
-        )
-
-        self.base_retry_delay = (
-            base_retry_delay
-        )
-
-        self.max_retry_delay = (
-            max_retry_delay
-        )
+        self.max_retries = max_retries
+        self.base_retry_delay = base_retry_delay
+        self.max_retry_delay = max_retry_delay
 
     def _status_code_for(
         self,
@@ -94,10 +77,7 @@ class LLMClient:
             None,
         )
 
-        if isinstance(
-            status_code,
-            int,
-        ):
+        if isinstance(status_code, int):
             return status_code
 
         response = getattr(
@@ -125,26 +105,19 @@ class LLMClient:
         self,
         exc: Exception,
     ) -> bool:
-        status_code = (
-            self._status_code_for(
-                exc
-            )
+        status_code = self._status_code_for(
+            exc
         )
 
         if status_code == 429:
             return True
 
-        message = str(
-            exc
-        ).lower()
+        message = str(exc).lower()
 
         return (
-            "rate limit"
-            in message
-            or "rate_limit_exceeded"
-            in message
-            or "too many requests"
-            in message
+            "rate limit" in message
+            or "rate_limit_exceeded" in message
+            or "too many requests" in message
         )
 
     def _is_json_validation_error(
@@ -152,44 +125,41 @@ class LLMClient:
         exc: Exception,
     ) -> bool:
         """
-        Detect provider-side failures where
-        Groq cannot satisfy JSON response
-        formatting before returning content.
-
-        NEXUS can safely fall back to plain
-        completion because agents perform
-        their own JSON + Pydantic validation.
+        Detect provider-side failures related
+        to JSON or structured-output validation.
         """
 
-        status_code = (
-            self._status_code_for(
-                exc
-            )
+        status_code = self._status_code_for(
+            exc
         )
 
-        message = str(
-            exc
-        ).lower()
+        message = str(exc).lower()
+
+        if "json_validate_failed" in message:
+            return True
 
         if (
-            "json_validate_failed"
+            status_code == 400
+            and "failed to validate json" in message
+        ):
+            return True
+
+        if (
+            status_code == 400
+            and "failed to generate json" in message
+        ):
+            return True
+
+        if (
+            status_code == 400
+            and "does not match the expected schema"
             in message
         ):
             return True
 
         if (
             status_code == 400
-            and
-            "failed to validate json"
-            in message
-        ):
-            return True
-
-        if (
-            status_code == 400
-            and
-            "failed to generate json"
-            in message
+            and "schema validation" in message
         ):
             return True
 
@@ -218,26 +188,17 @@ class LLMClient:
             return None
 
         value = (
-            headers.get(
-                "retry-after"
-            )
-            or headers.get(
-                "Retry-After"
-            )
+            headers.get("retry-after")
+            or headers.get("Retry-After")
         )
 
         if value is None:
             return None
 
         try:
-            delay = float(
-                value
-            )
+            delay = float(value)
 
-        except (
-            TypeError,
-            ValueError,
-        ):
+        except (TypeError, ValueError):
             return None
 
         if delay < 0:
@@ -249,9 +210,7 @@ class LLMClient:
         self,
         exc: Exception,
     ) -> Optional[float]:
-        message = str(
-            exc
-        )
+        message = str(exc)
 
         patterns = [
             (
@@ -280,10 +239,7 @@ class LLMClient:
                     match.group(1)
                 )
 
-            except (
-                TypeError,
-                ValueError,
-            ):
+            except (TypeError, ValueError):
                 continue
 
         return None
@@ -301,8 +257,7 @@ class LLMClient:
 
         if provider_delay is None:
             provider_delay = (
-                self
-                ._retry_after_from_message(
+                self._retry_after_from_message(
                     exc
                 )
             )
@@ -316,9 +271,7 @@ class LLMClient:
         else:
             delay = (
                 self.base_retry_delay
-                * (
-                    2 ** attempt
-                )
+                * (2 ** attempt)
             )
 
         return min(
@@ -328,21 +281,21 @@ class LLMClient:
 
     def _create_completion(
         self,
-        kwargs: dict,
+        kwargs: dict[str, Any],
     ):
         """
-        Execute a completion request.
+        Execute a Groq completion request.
 
-        Recovery strategies:
+        Recovery strategy:
 
         1. Retry provider rate limits.
 
-        2. If Groq provider-side JSON
-           formatting fails, retry once
-           without response_format.
+        2. If provider-side JSON or schema
+           validation fails, remove the
+           response_format and retry once.
 
-           Agent-level JSON/Pydantic
-           validation remains active.
+        Agent-level JSON/Pydantic validation
+        remains the final reliability layer.
         """
 
         attempt = 0
@@ -364,15 +317,10 @@ class LLMClient:
                     self._is_json_validation_error(
                         exc
                     )
-                    and
-                    "response_format"
-                    in kwargs
-                    and
-                    not json_fallback_used
+                    and "response_format" in kwargs
+                    and not json_fallback_used
                 ):
-                    kwargs = dict(
-                        kwargs
-                    )
+                    kwargs = dict(kwargs)
 
                     kwargs.pop(
                         "response_format",
@@ -384,10 +332,10 @@ class LLMClient:
                     print(
                         "\n"
                         "[NEXUS LLM] "
-                        "Provider JSON validation "
-                        "failed. Retrying with "
-                        "NEXUS-side structured "
-                        "validation..."
+                        "Provider structured-output "
+                        "validation failed. "
+                        "Retrying with NEXUS-side "
+                        "structured validation..."
                     )
 
                     continue
@@ -397,17 +345,12 @@ class LLMClient:
                 ):
                     raise
 
-                if (
-                    attempt
-                    >= self.max_retries
-                ):
-                    raise (
-                        LLMRetryExhaustedError(
-                            "Groq rate limit "
-                            "persisted after "
-                            f"{self.max_retries} "
-                            "retries."
-                        )
+                if attempt >= self.max_retries:
+                    raise LLMRetryExhaustedError(
+                        "Groq rate limit persisted "
+                        "after "
+                        f"{self.max_retries} "
+                        "retries."
                     ) from exc
 
                 delay = self._retry_delay(
@@ -419,16 +362,13 @@ class LLMClient:
                     "\n"
                     "[NEXUS LLM] "
                     "Groq rate limit reached. "
-                    f"Retrying in "
-                    f"{delay:.1f}s "
+                    f"Retrying in {delay:.1f}s "
                     f"(attempt "
                     f"{attempt + 1}/"
                     f"{self.max_retries})..."
                 )
 
-                time.sleep(
-                    delay
-                )
+                time.sleep(delay)
 
                 attempt += 1
 
@@ -437,33 +377,74 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
-        max_tokens: Optional[
-            int
+        max_tokens: Optional[int] = None,
+        json_schema: Optional[
+            dict[str, Any]
         ] = None,
+        schema_name: str = (
+            "nexus_structured_output"
+        ),
+        strict_schema: bool = True,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
-        kwargs = {
-            "model":
-                settings.groq_model,
+        """
+        Generate an LLM completion.
 
+        json_mode:
+            Uses Groq JSON Object Mode.
+
+        json_schema:
+            Uses Groq Structured Outputs.
+            When supplied, it takes precedence
+            over json_mode.
+
+        reasoning_effort:
+            Optional reasoning budget.
+            GPT-OSS supports:
+            low, medium, high.
+        """
+
+        if (
+            json_schema is not None
+            and not isinstance(
+                json_schema,
+                dict,
+            )
+        ):
+            raise ValueError(
+                "json_schema must be a dictionary."
+            )
+
+        if not schema_name.strip():
+            raise ValueError(
+                "schema_name cannot be empty."
+            )
+
+        if reasoning_effort not in {
+            None,
+            "low",
+            "medium",
+            "high",
+        }:
+            raise ValueError(
+                "reasoning_effort must be "
+                "'low', 'medium', 'high', "
+                "or None."
+            )
+
+        kwargs: dict[str, Any] = {
+            "model": settings.groq_model,
             "messages": [
                 {
-                    "role":
-                        "system",
-
-                    "content":
-                        system_prompt,
+                    "role": "system",
+                    "content": system_prompt,
                 },
                 {
-                    "role":
-                        "user",
-
-                    "content":
-                        user_prompt,
+                    "role": "user",
+                    "content": user_prompt,
                 },
             ],
-
-            "temperature":
-                0.1,
+            "temperature": 0.1,
         }
 
         if max_tokens is not None:
@@ -477,18 +458,32 @@ class LLMClient:
                 "max_completion_tokens"
             ] = max_tokens
 
-        if json_mode:
+        if reasoning_effort is not None:
+            kwargs[
+                "reasoning_effort"
+            ] = reasoning_effort
+
+        if json_schema is not None:
             kwargs[
                 "response_format"
             ] = {
-                "type":
-                    "json_object"
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": strict_schema,
+                    "schema": json_schema,
+                },
             }
 
-        response = (
-            self._create_completion(
-                kwargs
-            )
+        elif json_mode:
+            kwargs[
+                "response_format"
+            ] = {
+                "type": "json_object"
+            }
+
+        response = self._create_completion(
+            kwargs
         )
 
         content = (
