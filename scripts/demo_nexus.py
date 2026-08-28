@@ -614,18 +614,29 @@ def print_governance(
 
 def run_demo(
     user_request: str,
+    resume_run_id: str | None = None,
 ) -> int:
     heading(
         "NEXUS — AUTONOMOUS AI ENGINEERING SYSTEM"
     )
 
-    print(
-        "User request:"
-    )
+    if resume_run_id is None:
+        print(
+            "User request:"
+        )
 
-    print(
-        user_request
-    )
+        print(
+            user_request
+        )
+
+    else:
+        print(
+            "Resume requested for persisted workflow:"
+        )
+
+        print(
+            resume_run_id
+        )
 
     heading(
         "BUILDING PRODUCTION RUNTIME"
@@ -649,9 +660,65 @@ def run_demo(
         engine
     )
 
-    state = build_demo_state(
-        user_request
-    )
+    if resume_run_id is not None:
+        heading(
+            "RECOVERING PERSISTED WORKFLOW"
+        )
+
+        print(
+            "Run ID:"
+        )
+
+        print(
+            resume_run_id
+        )
+
+        try:
+            state = engine.restore_run(
+                resume_run_id,
+                allow_failed=True,
+            )
+
+        except Exception as exc:
+            print()
+            print(
+                "NEXUS recovery failed."
+            )
+
+            print(
+                f"Error: {exc}"
+            )
+
+            return 1
+
+        print(
+            "Checkpoint restored successfully."
+        )
+
+        recovery_metadata = state.metadata.get(
+            "recovered_from_checkpoint",
+            {},
+        )
+
+        print(
+            "Checkpoint ID: "
+            f"{recovery_metadata.get('checkpoint_id')}"
+        )
+
+        print(
+            "Checkpoint sequence: "
+            f"{recovery_metadata.get('sequence')}"
+        )
+
+        print(
+            "Checkpoint type: "
+            f"{recovery_metadata.get('checkpoint_type')}"
+        )
+
+    else:
+        state = build_demo_state(
+            user_request
+        )
 
     print_plan(
         state
@@ -669,7 +736,7 @@ def run_demo(
     except Exception as exc:
         print()
         print(
-            "NEXUS execution failed."
+            "NEXUS execution interrupted."
         )
 
         print(
@@ -682,6 +749,21 @@ def run_demo(
 
         print_task_results(
             state
+        )
+
+        print_checkpointing(
+            engine,
+            state,
+        )
+
+        print()
+        print(
+            "This workflow can be resumed with:"
+        )
+
+        print(
+            "python scripts/demo_nexus.py "
+            f"--resume {state.run_id}"
         )
 
         return 1
@@ -745,6 +827,17 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Resume a persisted NEXUS workflow "
+            "from its latest checkpoint."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -752,7 +845,8 @@ def main() -> int:
     args = parse_args()
 
     return run_demo(
-        args.request
+        args.request,
+        resume_run_id=args.resume,
     )
 
 
