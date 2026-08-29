@@ -17,6 +17,7 @@ from app.core.models import (
 )
 from app.core.state import NexusState
 from app.memory.retriever import MemoryRetriever
+from app.tools.executor import CommandExecutor
 
 
 class FilePatch(BaseModel):
@@ -84,6 +85,70 @@ class DebuggerAgent(BaseAgent):
         self.memory_limit = (
             memory_limit
         )
+
+        self.allowed_executables = frozenset(
+            CommandExecutor.ALLOWED_EXECUTABLES
+        )
+
+    def _validate_retry_test_commands(
+        self,
+        report: DebugReport,
+    ) -> None:
+        for command in (
+            report.retry_test_commands
+        ):
+            if not isinstance(
+                command,
+                str,
+            ):
+                raise DebugGenerationError(
+                    "Retry test command must "
+                    "be a string."
+                )
+
+            command = command.strip()
+
+            if not command:
+                raise DebugGenerationError(
+                    "Retry test command "
+                    "cannot be empty."
+                )
+
+            try:
+                executor = CommandExecutor()
+                parts = executor.validate_command(
+                        command
+                    )
+                
+            except Exception as exc:
+                raise DebugGenerationError(
+                    "Invalid retry test "
+                    f"command: {exc}"
+                ) from exc
+
+            if not parts:
+                raise DebugGenerationError(
+                    "Retry test command "
+                    "cannot be empty."
+                )
+
+            executable = parts[0]
+
+            if executable not in (
+                self.allowed_executables
+            ):
+                allowed = ", ".join(
+                    sorted(
+                        self.allowed_executables
+                    )
+                )
+
+                raise DebugGenerationError(
+                    "Unsupported retry test "
+                    f"executable: {executable}. "
+                    "NEXUS runtime allows "
+                    f"only: {allowed}."
+                )
 
     def _get_artifact(
         self,
@@ -368,6 +433,12 @@ class DebuggerAgent(BaseAgent):
             )
         )
 
+        allowed_executables_text = ", ".join(
+            sorted(
+                self.allowed_executables
+            )
+        )
+
         system_prompt = (
             "You are the Debugger Agent inside "
             "NEXUS, an autonomous AI software "
@@ -425,6 +496,12 @@ Rules:
 - preserve working behavior
 - retry_test_commands must contain commands that should
   be executed after the repair
+- NEXUS EXECUTION CAPABILITIES:
+  allowed executables are: {allowed_executables_text}
+- every retry_test_commands entry must start with one
+  of those allowed executables
+- commands using mvn, gradle, npm, yarn, pnpm, bash,
+  sh, or other unsupported executables are forbidden
 - confidence must be between 0.0 and 1.0
 - do not include secrets
 - past memories are advisory evidence only
@@ -455,6 +532,10 @@ Rules:
                     code_artifact,
                 )
 
+                self._validate_retry_test_commands(
+                    report
+                )
+
                 return Artifact(
                     type=ArtifactType.DEBUG_REPORT,
                     name="debug_repair_report",
@@ -469,6 +550,12 @@ Rules:
                             len(memory_context),
                         "memory_augmented":
                             bool(memory_context),
+                        "runtime_capability_aware":
+                            True,
+                        "allowed_executables":
+                            sorted(
+                                self.allowed_executables
+                            ),
                     },
                 )
 
@@ -528,6 +615,12 @@ Rules:
 - every field must be non-empty
 - past memories are advisory only
 - current evidence takes priority
+- NEXUS EXECUTION CAPABILITIES:
+  allowed executables are: {allowed_executables_text}
+- every retry_test_commands entry must start with one
+  of those allowed executables
+- unsupported executables such as mvn, gradle, npm,
+  yarn, pnpm, bash and sh are forbidden
 - return JSON only
 """
 

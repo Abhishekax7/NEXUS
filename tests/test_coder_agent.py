@@ -91,11 +91,11 @@ class FakeCoderLLM:
                 ],
 
                 "run_commands": [
-                    "uvicorn app:app --reload",
+                    "python app.py",
                 ],
 
                 "test_commands": [
-                    "pytest -v",
+                    "pytest -q",
                 ],
 
                 "implementation_notes": [
@@ -861,4 +861,556 @@ def test_coder_uses_completion_budget():
     assert (
         fake_llm.max_tokens
         == 3500
+    )
+def test_coder_rejects_unsupported_maven_command():
+    state, task = build_state_and_task()
+
+    fake_llm = FakeCoderLLM()
+
+    original_response = fake_llm.response
+
+    payload = json.loads(
+        original_response
+    )
+
+    payload["run_commands"] = [
+        "python app.py",
+    ]
+
+    payload["test_commands"] = [
+        "mvn test",
+    ]
+
+    fake_llm.response = json.dumps(
+        payload
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm,
+        max_validation_retries=0,
+    )
+
+    with pytest.raises(
+        CodeGenerationError,
+        match="Executable is not allowed: mvn",
+    ):
+        agent.execute(
+            task,
+            state,
+        )
+
+
+def test_coder_rejects_unsupported_npm_command():
+    state, task = build_state_and_task()
+
+    fake_llm = FakeCoderLLM()
+
+    payload = json.loads(
+        fake_llm.response
+    )
+
+    payload["run_commands"] = [
+        "npm start",
+    ]
+
+    fake_llm.response = json.dumps(
+        payload
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm,
+        max_validation_retries=0,
+    )
+
+    with pytest.raises(
+        CodeGenerationError,
+        match="Executable is not allowed: npm",
+    ):
+        agent.execute(
+            task,
+            state,
+        )
+
+
+def test_coder_accepts_supported_runtime_commands():
+    state, task = build_state_and_task()
+
+    fake_llm = FakeCoderLLM()
+
+    payload = json.loads(
+        fake_llm.response
+    )
+
+    payload["run_commands"] = [
+        "python app.py",
+    ]
+
+    payload["test_commands"] = [
+        "pytest -q",
+    ]
+
+    fake_llm.response = json.dumps(
+        payload
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert artifact.content[
+        "run_commands"
+    ] == [
+        "python app.py",
+    ]
+
+    assert artifact.content[
+        "test_commands"
+    ] == [
+        "pytest -q",
+    ]
+
+    assert (
+        artifact.metadata[
+            "runtime_capability_aware"
+        ]
+        is True
+    )
+
+    assert artifact.metadata[
+        "allowed_executables"
+    ] == [
+        "pytest",
+        "python",
+        "python3",
+    ]
+
+
+def test_coder_prompt_exposes_runtime_capabilities():
+    state, task = build_state_and_task()
+
+    fake_llm = FakeCoderLLM()
+
+    agent = CoderAgent(
+        llm_client=fake_llm
+    )
+
+    agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.last_user_prompt is not None
+
+    assert (
+        "NEXUS EXECUTION CAPABILITIES"
+        in fake_llm.last_user_prompt
+    )
+
+    assert (
+        "pytest, python, python3"
+        in fake_llm.last_user_prompt
+    )
+
+
+class UnsupportedThenRepairingCoderLLM:
+    def __init__(self):
+        self.calls = 0
+
+    def generate(
+        self,
+        system_prompt,
+        user_prompt,
+        json_mode=False,
+        max_tokens=None,
+        json_schema=None,
+        schema_name="nexus_structured_output",
+        strict_schema=True,
+        reasoning_effort=None,
+    ):
+        self.calls += 1
+
+        if self.calls == 1:
+            return json.dumps(
+                {
+                    "project_name": "demo",
+                    "summary": "Demo",
+                    "files": [
+                        {
+                            "path": "app.py",
+                            "content": (
+                                "print('hello')\n"
+                            ),
+                            "purpose": "Entry point",
+                        },
+                        {
+                            "path": "test_app.py",
+                            "content": (
+                                "def test_demo():\n"
+                                "    assert True\n"
+                            ),
+                            "purpose": "Tests",
+                        },
+                    ],
+                    "dependencies": [
+                        "pytest",
+                    ],
+                    "run_commands": [
+                        "python app.py",
+                    ],
+                    "test_commands": [
+                        "mvn test",
+                    ],
+                    "implementation_notes": [
+                        "First response uses unsupported command",
+                    ],
+                }
+            )
+
+        return json.dumps(
+            {
+                "project_name": "demo",
+                "summary": "Demo",
+                "files": [
+                    {
+                        "path": "app.py",
+                        "content": (
+                            "print('hello')\n"
+                        ),
+                        "purpose": "Entry point",
+                    },
+                    {
+                        "path": "test_app.py",
+                        "content": (
+                            "def test_demo():\n"
+                            "    assert True\n"
+                        ),
+                        "purpose": "Tests",
+                    },
+                ],
+                "dependencies": [
+                    "pytest",
+                ],
+                "run_commands": [
+                    "python app.py",
+                ],
+                "test_commands": [
+                    "pytest -q",
+                ],
+                "implementation_notes": [
+                    "Repaired for runtime compatibility",
+                ],
+            }
+        )
+
+
+def test_coder_repairs_unsupported_test_command():
+    state, task = build_state_and_task()
+
+    fake_llm = (
+        UnsupportedThenRepairingCoderLLM()
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm,
+        max_validation_retries=1,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.calls == 2
+
+    assert artifact.content[
+        "test_commands"
+    ] == [
+        "pytest -q",
+    ]
+
+    assert (
+        artifact.metadata[
+            "validation_attempts"
+        ]
+        == 2
+    )
+class MavenCommandCoderLLM(FakeCoderLLM):
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        raw = super().generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_mode=json_mode,
+            max_tokens=max_tokens,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            strict_schema=strict_schema,
+            reasoning_effort=reasoning_effort,
+        )
+
+        payload = json.loads(raw)
+
+        payload["test_commands"] = [
+            "mvn test",
+        ]
+
+        return json.dumps(payload)
+
+
+class NpmCommandCoderLLM(FakeCoderLLM):
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        raw = super().generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_mode=json_mode,
+            max_tokens=max_tokens,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            strict_schema=strict_schema,
+            reasoning_effort=reasoning_effort,
+        )
+
+        payload = json.loads(raw)
+
+        payload["run_commands"] = [
+            "npm start",
+        ]
+
+        return json.dumps(payload)
+
+
+class RuntimeCapturingCoderLLM(FakeCoderLLM):
+
+    def __init__(self):
+        self.last_user_prompt = None
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        self.last_user_prompt = user_prompt
+
+        return super().generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_mode=json_mode,
+            max_tokens=max_tokens,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            strict_schema=strict_schema,
+            reasoning_effort=reasoning_effort,
+        )
+
+
+class UnsupportedThenRepairingCoderLLM(
+    FakeCoderLLM
+):
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+        json_schema=None,
+        schema_name: str = "nexus_structured_output",
+        strict_schema: bool = True,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        self.calls += 1
+
+        raw = super().generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            json_mode=json_mode,
+            max_tokens=max_tokens,
+            json_schema=json_schema,
+            schema_name=schema_name,
+            strict_schema=strict_schema,
+            reasoning_effort=reasoning_effort,
+        )
+
+        payload = json.loads(raw)
+
+        if self.calls == 1:
+            payload["test_commands"] = [
+                "mvn test",
+            ]
+        else:
+            payload["test_commands"] = [
+                "pytest -q",
+            ]
+
+        return json.dumps(payload)
+
+
+def test_coder_rejects_unsupported_maven_command():
+    state, task = build_state_and_task()
+
+    agent = CoderAgent(
+        llm_client=MavenCommandCoderLLM(),
+        max_validation_retries=0,
+    )
+
+    with pytest.raises(
+        CodeGenerationError,
+        match="Executable is not allowed: mvn",
+    ):
+        agent.execute(
+            task,
+            state,
+        )
+
+
+def test_coder_rejects_unsupported_npm_command():
+    state, task = build_state_and_task()
+
+    agent = CoderAgent(
+        llm_client=NpmCommandCoderLLM(),
+        max_validation_retries=0,
+    )
+
+    with pytest.raises(
+        CodeGenerationError,
+        match="Executable is not allowed: npm",
+    ):
+        agent.execute(
+            task,
+            state,
+        )
+
+
+def test_coder_accepts_supported_runtime_commands():
+    state, task = build_state_and_task()
+
+    agent = CoderAgent(
+        llm_client=FakeCoderLLM()
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert artifact.content[
+        "run_commands"
+    ] == [
+        "python app.py",
+    ]
+
+    assert artifact.content[
+        "test_commands"
+    ] == [
+        "pytest -q",
+    ]
+
+    assert (
+        artifact.metadata[
+            "runtime_capability_aware"
+        ]
+        is True
+    )
+
+    assert artifact.metadata[
+        "allowed_executables"
+    ] == [
+        "pytest",
+        "python",
+        "python3",
+    ]
+
+
+def test_coder_prompt_exposes_runtime_capabilities():
+    state, task = build_state_and_task()
+
+    fake_llm = RuntimeCapturingCoderLLM()
+
+    agent = CoderAgent(
+        llm_client=fake_llm
+    )
+
+    agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.last_user_prompt is not None
+
+    assert (
+        "NEXUS EXECUTION CAPABILITIES"
+        in fake_llm.last_user_prompt
+    )
+
+    assert (
+        "pytest, python, python3"
+        in fake_llm.last_user_prompt
+    )
+
+
+def test_coder_repairs_unsupported_test_command():
+    state, task = build_state_and_task()
+
+    fake_llm = (
+        UnsupportedThenRepairingCoderLLM()
+    )
+
+    agent = CoderAgent(
+        llm_client=fake_llm,
+        max_validation_retries=1,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.calls == 2
+
+    assert artifact.content[
+        "test_commands"
+    ] == [
+        "pytest -q",
+    ]
+
+    assert (
+        artifact.metadata[
+            "validation_attempts"
+        ]
+        == 2
     )

@@ -474,3 +474,97 @@ def test_tester_agent_records_workspace_metadata(
         state.run_id
         in artifact.metadata["workspace"]
     )
+class PolicyRejectingExecutor:
+
+    def execute(
+        self,
+        command,
+        workspace,
+    ):
+        from app.tools.executor import (
+            ExecutionError,
+        )
+
+        raise ExecutionError(
+            "Executable is not allowed: mvn"
+        )
+
+
+def test_tester_records_execution_policy_rejection(
+    tmp_path,
+):
+    state, task = build_state_and_task(
+        test_commands=[
+            "mvn test",
+        ]
+    )
+
+    agent = NexusTesterAgent(
+        workspace_writer=(
+            FakeWorkspaceWriter(
+                tmp_path
+            )
+        ),
+        executor=(
+            PolicyRejectingExecutor()
+        ),
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert (
+        artifact.type
+        == ArtifactType.TEST_RESULT
+    )
+
+    assert (
+        artifact.content["passed"]
+        is False
+    )
+
+    assert (
+        artifact.content[
+            "failed_commands"
+        ]
+        == 1
+    )
+
+    result = (
+        artifact.content[
+            "results"
+        ][0]
+    )
+
+    assert result["command"] == (
+        "mvn test"
+    )
+
+    assert (
+        result["exit_code"]
+        == -1
+    )
+
+    assert (
+        result["timed_out"]
+        is False
+    )
+
+    assert (
+        result["passed"]
+        is False
+    )
+
+    assert (
+        "Executable is not allowed: mvn"
+        in result["stderr"]
+    )
+
+    assert (
+        artifact.metadata[
+            "execution_policy_rejections"
+        ]
+        == 1
+    )

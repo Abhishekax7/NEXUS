@@ -1,5 +1,6 @@
 import shlex
 import subprocess
+
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -21,6 +22,9 @@ class CommandExecutor:
     """
     Executes a restricted set of development commands
     inside a specific NEXUS run workspace.
+
+    CommandExecutor is the authoritative runtime-policy
+    boundary for executable command validation.
     """
 
     ALLOWED_EXECUTABLES = {
@@ -52,28 +56,34 @@ class CommandExecutor:
 
         self.timeout_seconds = timeout_seconds
 
-    def _validate_workspace(
+    @property
+    def allowed_executables(
         self,
-        workspace: Path,
-    ) -> Path:
-        workspace = workspace.resolve()
+    ) -> frozenset[str]:
+        """
+        Return the executables supported by the
+        current NEXUS runtime.
 
-        if not workspace.exists():
-            raise ExecutionError(
-                f"Workspace does not exist: {workspace}"
-            )
+        A frozen set prevents callers from mutating
+        the executor policy accidentally.
+        """
 
-        if not workspace.is_dir():
-            raise ExecutionError(
-                f"Workspace is not a directory: {workspace}"
-            )
+        return frozenset(
+            self.ALLOWED_EXECUTABLES
+        )
 
-        return workspace
-
-    def _parse_command(
+    def validate_command(
         self,
         command: str,
     ) -> list[str]:
+        """
+        Validate a command against the NEXUS execution
+        policy and return its parsed argument list.
+
+        This method performs validation only.
+        It never executes the command.
+        """
+
         if not isinstance(command, str):
             raise ExecutionError(
                 "Command must be a string."
@@ -88,6 +98,7 @@ class CommandExecutor:
 
         try:
             parts = shlex.split(command)
+
         except ValueError as exc:
             raise ExecutionError(
                 f"Invalid command syntax: {exc}"
@@ -106,12 +117,45 @@ class CommandExecutor:
 
         executable = parts[0]
 
-        if executable not in self.ALLOWED_EXECUTABLES:
+        if executable not in self.allowed_executables:
             raise ExecutionError(
                 f"Executable is not allowed: {executable}"
             )
 
         return parts
+
+    def _parse_command(
+        self,
+        command: str,
+    ) -> list[str]:
+        """
+        Backward-compatible private wrapper.
+
+        New NEXUS components should use
+        validate_command() directly.
+        """
+
+        return self.validate_command(
+            command
+        )
+
+    def _validate_workspace(
+        self,
+        workspace: Path,
+    ) -> Path:
+        workspace = workspace.resolve()
+
+        if not workspace.exists():
+            raise ExecutionError(
+                f"Workspace does not exist: {workspace}"
+            )
+
+        if not workspace.is_dir():
+            raise ExecutionError(
+                f"Workspace is not a directory: {workspace}"
+            )
+
+        return workspace
 
     def execute(
         self,
@@ -122,7 +166,7 @@ class CommandExecutor:
             workspace
         )
 
-        args = self._parse_command(
+        args = self.validate_command(
             command
         )
 

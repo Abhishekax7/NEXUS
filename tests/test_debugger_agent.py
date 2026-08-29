@@ -665,7 +665,7 @@ def test_debugger_rejects_unknown_file():
 
     with pytest.raises(
         DebugGenerationError,
-        match="unknown file",
+        match="Debugger attempted to patch unknown file: unknown.py",
     ):
         agent.execute(
             task,
@@ -831,3 +831,155 @@ def test_debugger_does_not_run_when_tests_pass():
             task,
             state,
         )
+class MavenCommandDebuggerLLM(FakeDebuggerLLM):
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+    ) -> str:
+        data = json.loads(
+            super().generate(
+                system_prompt,
+                user_prompt,
+                json_mode,
+            )
+        )
+
+        data["retry_test_commands"] = [
+            "mvn test"
+        ]
+
+        return json.dumps(data)
+
+
+class UnsupportedThenRepairingDebuggerLLM:
+    def __init__(self):
+        self.calls = 0
+        self.prompts = []
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_mode: bool = False,
+    ) -> str:
+        self.calls += 1
+        self.prompts.append(user_prompt)
+
+        data = json.loads(
+            FakeDebuggerLLM().generate(
+                system_prompt,
+                user_prompt,
+                json_mode,
+            )
+        )
+
+        if self.calls == 1:
+            data["retry_test_commands"] = [
+                "mvn test"
+            ]
+        else:
+            data["retry_test_commands"] = [
+                "pytest -q"
+            ]
+
+        return json.dumps(data)
+
+
+def test_debugger_rejects_unsupported_maven_command():
+    state, task = build_state_and_task()
+
+    agent = DebuggerAgent(
+        llm_client=MavenCommandDebuggerLLM(),
+        max_validation_retries=0,
+    )
+
+    with pytest.raises(
+        DebugGenerationError,
+        match="Executable is not allowed: mvn",
+    ):
+        agent.execute(
+            task,
+            state,
+        )
+
+
+def test_debugger_repairs_unsupported_retry_command():
+    state, task = build_state_and_task()
+
+    fake_llm = (
+        UnsupportedThenRepairingDebuggerLLM()
+    )
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm,
+        max_validation_retries=1,
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    assert fake_llm.calls == 2
+
+    assert (
+        "Executable is not allowed: mvn"
+        in fake_llm.prompts[1]
+    )
+
+    assert (
+        artifact.metadata[
+            "validation_attempts"
+        ]
+        == 2
+    )
+
+    assert (
+        "Executable is not allowed: mvn"
+        in fake_llm.prompts[1]
+    )
+
+
+def test_debugger_exposes_runtime_capabilities():
+    state, task = build_state_and_task()
+
+    fake_llm = FakeDebuggerLLM()
+
+    agent = DebuggerAgent(
+        llm_client=fake_llm
+    )
+
+    artifact = agent.execute(
+        task,
+        state,
+    )
+
+    prompt = fake_llm.last_user_prompt
+
+    assert (
+        "NEXUS EXECUTION CAPABILITIES"
+        in prompt
+    )
+
+    assert "pytest" in prompt
+    assert "python" in prompt
+    assert "python3" in prompt
+
+    assert (
+        artifact.metadata[
+            "runtime_capability_aware"
+        ]
+        is True
+    )
+
+    assert set(
+        artifact.metadata[
+            "allowed_executables"
+        ]
+    ) == {
+        "python",
+        "python3",
+        "pytest",
+    }

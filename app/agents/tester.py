@@ -11,7 +11,10 @@ from app.core.models import (
     ArtifactType,
 )
 from app.core.state import NexusState
-from app.tools.executor import CommandExecutor
+from app.tools.executor import (
+    CommandExecutor,
+    ExecutionError,
+)
 from app.tools.workspace import WorkspaceWriter
 
 
@@ -26,28 +29,14 @@ class CommandTestResult(BaseModel):
 
 class TestReport(BaseModel):
     passed: bool
-
-    total_commands: int = Field(
-        ge=1
-    )
-
-    passed_commands: int = Field(
-        ge=0
-    )
-
-    failed_commands: int = Field(
-        ge=0
-    )
-
+    total_commands: int = Field(ge=1)
+    passed_commands: int = Field(ge=0)
+    failed_commands: int = Field(ge=0)
     results: list[CommandTestResult] = Field(
         min_length=1
     )
-
     failed_command_names: list[str]
-
-    summary: str = Field(
-        min_length=1
-    )
+    summary: str = Field(min_length=1)
 
 
 class TestingError(Exception):
@@ -59,14 +48,17 @@ class TesterAgent(BaseAgent):
 
     def __init__(
         self,
-        workspace_writer: Optional[WorkspaceWriter] = None,
-        executor: Optional[CommandExecutor] = None,
+        workspace_writer: Optional[
+            WorkspaceWriter
+        ] = None,
+        executor: Optional[
+            CommandExecutor
+        ] = None,
     ):
         self.workspace_writer = (
             workspace_writer
             or WorkspaceWriter()
         )
-
         self.executor = (
             executor
             or CommandExecutor()
@@ -77,9 +69,13 @@ class TesterAgent(BaseAgent):
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-        for artifact_id in task.input_artifact_ids:
-            artifact = state.artifacts.get(
-                artifact_id
+        for artifact_id in (
+            task.input_artifact_ids
+        ):
+            artifact = (
+                state.artifacts.get(
+                    artifact_id
+                )
             )
 
             if (
@@ -89,8 +85,13 @@ class TesterAgent(BaseAgent):
             ):
                 return artifact
 
-        for artifact in state.artifacts.values():
-            if artifact.type == ArtifactType.CODE:
+        for artifact in (
+            state.artifacts.values()
+        ):
+            if (
+                artifact.type
+                == ArtifactType.CODE
+            ):
                 return artifact
 
         raise TestingError(
@@ -101,26 +102,35 @@ class TesterAgent(BaseAgent):
         self,
         code_artifact: Artifact,
     ) -> list[str]:
-        commands = code_artifact.content.get(
-            "test_commands"
+        commands = (
+            code_artifact.content.get(
+                "test_commands"
+            )
         )
 
-        if not isinstance(commands, list):
+        if not isinstance(
+            commands,
+            list,
+        ):
             raise TestingError(
-                "CODE artifact does not contain "
-                "a valid test_commands list."
+                "CODE artifact does not "
+                "contain a valid "
+                "test_commands list."
             )
 
         commands = [
             command
             for command in commands
-            if isinstance(command, str)
-            and command.strip()
+            if (
+                isinstance(command, str)
+                and command.strip()
+            )
         ]
 
         if not commands:
             raise TestingError(
-                "No valid test commands were provided."
+                "No valid test commands "
+                "were provided."
             )
 
         return commands
@@ -140,12 +150,13 @@ class TesterAgent(BaseAgent):
         state: NexusState,
     ) -> bool:
         """
-        Materialize generated code only when the run workspace
-        does not already contain the generated files.
+        Materialize generated code only when
+        the run workspace does not already
+        contain the generated files.
 
-        This prevents a retest from overwriting debugger patches.
+        This prevents a retest from overwriting
+        debugger patches.
         """
-
         workspace = self._get_workspace(
             state
         )
@@ -153,20 +164,30 @@ class TesterAgent(BaseAgent):
         if not workspace.exists():
             return True
 
-        files = code_artifact.content.get(
-            "files",
-            []
+        files = (
+            code_artifact.content.get(
+                "files",
+                [],
+            )
         )
 
-        if not isinstance(files, list):
+        if not isinstance(
+            files,
+            list,
+        ):
             return True
 
         for file_data in files:
-            if not isinstance(file_data, dict):
+            if not isinstance(
+                file_data,
+                dict,
+            ):
                 return True
 
-            relative_path = file_data.get(
-                "path"
+            relative_path = (
+                file_data.get(
+                    "path"
+                )
             )
 
             if not isinstance(
@@ -185,26 +206,77 @@ class TesterAgent(BaseAgent):
 
         return False
 
+    def _execute_test_command(
+        self,
+        command: str,
+        workspace: Path,
+    ) -> CommandTestResult:
+        try:
+            execution = (
+                self.executor.execute(
+                    command,
+                    workspace,
+                )
+            )
+
+            passed = (
+                execution.exit_code == 0
+                and not execution.timed_out
+            )
+
+            return CommandTestResult(
+                command=execution.command,
+                exit_code=(
+                    execution.exit_code
+                ),
+                stdout=execution.stdout,
+                stderr=execution.stderr,
+                timed_out=(
+                    execution.timed_out
+                ),
+                passed=passed,
+            )
+
+        except ExecutionError as exc:
+            return CommandTestResult(
+                command=command,
+                exit_code=-1,
+                stdout="",
+                stderr=(
+                    "NEXUS execution policy "
+                    f"rejected command: {exc}"
+                ),
+                timed_out=False,
+                passed=False,
+            )
+
     def execute(
         self,
         task: AgentTask,
         state: NexusState,
     ) -> Artifact:
-        code_artifact = self._get_code_artifact(
-            task,
-            state,
+        code_artifact = (
+            self._get_code_artifact(
+                task,
+                state,
+            )
         )
 
-        workspace = self._get_workspace(
-            state
+        workspace = (
+            self._get_workspace(
+                state
+            )
         )
 
         materialized = False
         written_file_count = 0
 
-        if self._workspace_needs_materialization(
-            code_artifact,
-            state,
+        if (
+            self
+            ._workspace_needs_materialization(
+                code_artifact,
+                state,
+            )
         ):
             written_files = (
                 self.workspace_writer
@@ -216,7 +288,8 @@ class TesterAgent(BaseAgent):
 
             if not written_files:
                 raise TestingError(
-                    "No generated files were written."
+                    "No generated files "
+                    "were written."
                 )
 
             written_file_count = len(
@@ -227,35 +300,30 @@ class TesterAgent(BaseAgent):
 
         if not workspace.exists():
             raise TestingError(
-                "Generated workspace does not exist."
+                "Generated workspace "
+                "does not exist."
             )
 
-        commands = self._get_test_commands(
-            code_artifact
+        commands = (
+            self._get_test_commands(
+                code_artifact
+            )
         )
 
-        results = []
+        results: list[
+            CommandTestResult
+        ] = []
 
         for command in commands:
-            execution = self.executor.execute(
-                command,
-                workspace,
-            )
-
-            passed = (
-                execution.exit_code == 0
-                and not execution.timed_out
+            result = (
+                self._execute_test_command(
+                    command,
+                    workspace,
+                )
             )
 
             results.append(
-                CommandTestResult(
-                    command=execution.command,
-                    exit_code=execution.exit_code,
-                    stdout=execution.stdout,
-                    stderr=execution.stderr,
-                    timed_out=execution.timed_out,
-                    passed=passed,
-                )
+                result
             )
 
         passed_commands = sum(
@@ -281,36 +349,60 @@ class TesterAgent(BaseAgent):
 
         if overall_passed:
             summary = (
-                "All generated test commands passed."
+                "All generated test "
+                "commands passed."
             )
         else:
             summary = (
                 f"{failed_commands} of "
-                f"{len(results)} test commands failed."
+                f"{len(results)} test "
+                "commands failed."
             )
 
         report = TestReport(
             passed=overall_passed,
-            total_commands=len(results),
-            passed_commands=passed_commands,
-            failed_commands=failed_commands,
+            total_commands=(
+                len(results)
+            ),
+            passed_commands=(
+                passed_commands
+            ),
+            failed_commands=(
+                failed_commands
+            ),
             results=results,
-            failed_command_names=failed_command_names,
+            failed_command_names=(
+                failed_command_names
+            ),
             summary=summary,
+        )
+
+        policy_rejections = sum(
+            1
+            for result in results
+            if (
+                result.stderr.startswith(
+                    "NEXUS execution policy "
+                    "rejected command:"
+                )
+            )
         )
 
         return Artifact(
             type=ArtifactType.TEST_RESULT,
-            name="generated_code_test_report",
+            name=(
+                "generated_code_test_report"
+            ),
             content=report.model_dump(),
             created_by=self.role,
             metadata={
-                "workspace": str(
-                    workspace
-                ),
+                "workspace":
+                    str(workspace),
                 "written_file_count":
                     written_file_count,
                 "workspace_materialized":
                     materialized,
+                "execution_policy_rejections":
+                    policy_rejections,
             },
         )
