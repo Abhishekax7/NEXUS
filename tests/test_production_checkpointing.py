@@ -4,7 +4,6 @@ import pytest
 
 from app.agents.base import BaseAgent
 from app.agents.registry import AgentRegistry
-
 from app.checkpointing.models import (
     RecoveryStatus,
 )
@@ -14,7 +13,6 @@ from app.checkpointing.service import (
 from app.checkpointing.store import (
     CheckpointStore,
 )
-
 from app.core.engine import NexusEngine
 from app.core.models import (
     AgentRole,
@@ -135,6 +133,118 @@ class SuccessfulTesterAgent(
         )
 
 
+class UnsupportedCommandCodingAgent(
+    BaseAgent
+):
+    """
+    Simulates an older CODE artifact that was
+    valid when generated but is incompatible
+    with the current NEXUS runtime policy.
+    """
+
+    role = AgentRole.CODER
+
+    def __init__(
+        self,
+        counter: dict,
+    ):
+        self.counter = counter
+
+    def execute(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> Artifact:
+        self.counter[
+            task.id
+        ] = (
+            self.counter.get(
+                task.id,
+                0,
+            )
+            + 1
+        )
+
+        return Artifact(
+            type=ArtifactType.CODE,
+            name="legacy_code_bundle",
+            content={
+                "project_name": (
+                    "legacy-app"
+                ),
+                "summary": (
+                    "Legacy generated code"
+                ),
+                "files": [],
+                "dependencies": [],
+                "run_commands": [
+                    "python app.py",
+                ],
+                "test_commands": [
+                    "mvn test",
+                ],
+                "implementation_notes": [],
+            },
+            created_by=self.role,
+        )
+
+
+class SupportedCommandCodingAgent(
+    BaseAgent
+):
+    """
+    Produces a CODE artifact that remains
+    compatible with the current runtime
+    command policy.
+    """
+
+    role = AgentRole.CODER
+
+    def __init__(
+        self,
+        counter: dict,
+    ):
+        self.counter = counter
+
+    def execute(
+        self,
+        task: AgentTask,
+        state: NexusState,
+    ) -> Artifact:
+        self.counter[
+            task.id
+        ] = (
+            self.counter.get(
+                task.id,
+                0,
+            )
+            + 1
+        )
+
+        return Artifact(
+            type=ArtifactType.CODE,
+            name="supported_code_bundle",
+            content={
+                "project_name": (
+                    "supported-app"
+                ),
+                "summary": (
+                    "Supported generated code"
+                ),
+                "files": [],
+                "dependencies": [],
+                "run_commands": [
+                    "python app.py",
+                ],
+                "test_commands": [
+                    "pytest -q",
+                ],
+                "implementation_notes": [],
+            },
+            created_by=self.role,
+        )
+
+
 def build_state():
     state = NexusState(
         user_request=(
@@ -162,7 +272,7 @@ def build_state():
             AgentRole.TESTER
         ),
         dependencies=[
-            coding_task.id
+            coding_task.id,
         ],
     )
 
@@ -242,6 +352,76 @@ def build_recovery_engine(
     registry.register(
         AgentRole.TESTER,
         lambda: SuccessfulTesterAgent(
+            counter
+        ),
+    )
+
+    return NexusEngine(
+        registry=registry,
+        checkpoint_service=(
+            checkpoint_service
+        ),
+        replanner=None,
+        repair_loop=None,
+        memory_manager=None,
+        evaluation_service=None,
+        observability_service=None,
+    )
+
+
+def build_legacy_runtime_engine(
+    checkpoint_service,
+    counter,
+):
+    registry = AgentRegistry()
+
+    registry.register(
+        AgentRole.CODER,
+        lambda: (
+            UnsupportedCommandCodingAgent(
+                counter
+            )
+        ),
+    )
+
+    registry.register(
+        AgentRole.TESTER,
+        lambda: CrashOnSecondAgent(
+            counter
+        ),
+    )
+
+    return NexusEngine(
+        registry=registry,
+        checkpoint_service=(
+            checkpoint_service
+        ),
+        replanner=None,
+        repair_loop=None,
+        memory_manager=None,
+        evaluation_service=None,
+        observability_service=None,
+    )
+
+
+def build_supported_runtime_engine(
+    checkpoint_service,
+    counter,
+):
+    registry = AgentRegistry()
+
+    registry.register(
+        AgentRole.CODER,
+        lambda: (
+            SupportedCommandCodingAgent(
+                counter
+            )
+        ),
+    )
+
+    registry.register(
+        AgentRole.TESTER,
+        lambda: CrashOnSecondAgent(
             counter
         ),
     )
@@ -481,7 +661,6 @@ def test_resume_does_not_execute_completed_task_again(
     )
 
     assert result.completed is True
-
     assert result.failed is False
 
     # Critical recovery proof:
@@ -636,3 +815,169 @@ def test_completed_run_cannot_be_resumed(
         recovery_engine.resume_run(
             state.run_id
         )
+
+
+def test_restore_invalidates_stale_code_artifact(
+    tmp_path,
+):
+    db_path = (
+        tmp_path
+        / "stale_runtime.db"
+    )
+
+    service = (
+        build_checkpoint_service(
+            db_path
+        )
+    )
+
+    counter = {}
+
+    state, coding_task, testing_task = (
+        build_state()
+    )
+
+    first_engine = (
+        build_legacy_runtime_engine(
+            service,
+            counter,
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError
+    ):
+        first_engine.run(
+            state
+        )
+
+    fresh_service = (
+        build_checkpoint_service(
+            db_path
+        )
+    )
+
+    recovery_engine = (
+        build_recovery_engine(
+            fresh_service,
+            counter,
+        )
+    )
+
+    recovered = (
+        recovery_engine.restore_run(
+            state.run_id,
+            allow_failed=True,
+        )
+    )
+
+    assert (
+        recovered.tasks[
+            coding_task.id
+        ].status
+        == TaskStatus.PENDING
+    )
+
+    assert (
+        recovered.tasks[
+            testing_task.id
+        ].status
+        == TaskStatus.PENDING
+    )
+
+    assert (
+        recovered.tasks[
+            coding_task.id
+        ].output_artifact_ids
+        == []
+    )
+
+    assert (
+        recovered.metadata[
+            "recovered_from_checkpoint"
+        ][
+            "runtime_artifacts_invalidated"
+        ]
+        is True
+    )
+
+
+def test_restore_preserves_runtime_compatible_code(
+    tmp_path,
+):
+    db_path = (
+        tmp_path
+        / "supported_runtime.db"
+    )
+
+    service = (
+        build_checkpoint_service(
+            db_path
+        )
+    )
+
+    counter = {}
+
+    state, coding_task, _ = (
+        build_state()
+    )
+
+    first_engine = (
+        build_supported_runtime_engine(
+            service,
+            counter,
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError
+    ):
+        first_engine.run(
+            state
+        )
+
+    fresh_service = (
+        build_checkpoint_service(
+            db_path
+        )
+    )
+
+    recovery_engine = (
+        build_recovery_engine(
+            fresh_service,
+            counter,
+        )
+    )
+
+    recovered = (
+        recovery_engine.restore_run(
+            state.run_id,
+            allow_failed=True,
+        )
+    )
+
+    assert (
+        recovered.tasks[
+            coding_task.id
+        ].status
+        == TaskStatus.COMPLETED
+    )
+
+    assert (
+        len(
+            recovered.tasks[
+                coding_task.id
+            ].output_artifact_ids
+        )
+        == 1
+    )
+
+    assert (
+        recovered.metadata[
+            "recovered_from_checkpoint"
+        ].get(
+            "runtime_artifacts_invalidated",
+            False,
+        )
+        is False
+    )

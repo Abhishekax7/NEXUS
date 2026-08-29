@@ -13,6 +13,7 @@ from app.checkpointing.service import (
 
 from app.core.models import (
     AgentRole,
+    ArtifactType,
     TaskStatus,
 )
 from app.core.plan_mutator import (
@@ -26,6 +27,11 @@ from app.core.scheduler import (
     get_ready_tasks,
 )
 from app.core.state import NexusState
+
+from app.tools.executor import (
+    CommandExecutor,
+    ExecutionError,
+)
 
 from app.evaluation.service import (
     EvaluationService,
@@ -712,6 +718,273 @@ class NexusEngine:
                 collector
             )
 
+    def _task_depends_on_any(
+        self,
+        task,
+        task_ids: set[str],
+        state: NexusState,
+    ) -> bool:
+        """
+        Return True when a task directly or
+        transitively depends on one of the
+        supplied task IDs.
+        """
+
+        pending = list(
+            task.dependencies
+        )
+
+        visited: set[str] = set()
+
+        while pending:
+            dependency_id = (
+                pending.pop()
+            )
+
+            if dependency_id in visited:
+                continue
+
+            visited.add(
+                dependency_id
+            )
+
+            if dependency_id in task_ids:
+                return True
+
+            dependency_task = (
+                state.tasks.get(
+                    dependency_id
+                )
+            )
+
+            if dependency_task is not None:
+                pending.extend(
+                    dependency_task.dependencies
+                )
+
+        return False
+
+    def _invalidate_runtime_incompatible_code(
+        self,
+        state: NexusState,
+    ) -> dict:
+        """
+        Validate restored CODE artifacts
+        against the current execution policy.
+
+        Older checkpoints may contain commands
+        that were previously generated but are
+        no longer executable by the current
+        NEXUS runtime.
+
+        When such an artifact is found, reset
+        its producing Coder task and every
+        downstream dependent task so the
+        scheduler can regenerate compatible
+        work.
+        """
+
+        executor = CommandExecutor()
+
+        invalid_task_ids: set[str] = set()
+        invalid_artifact_ids: set[str] = set()
+        reasons: list[str] = []
+
+        for task in state.tasks.values():
+            if (
+                task.assigned_agent
+                != AgentRole.CODER
+            ):
+                continue
+
+            for artifact_id in list(
+                task.output_artifact_ids
+            ):
+                artifact = (
+                    state.artifacts.get(
+                        artifact_id
+                    )
+                )
+
+                if artifact is None:
+                    continue
+
+                if (
+                    artifact.type
+                    != ArtifactType.CODE
+                ):
+                    continue
+
+                content = artifact.content
+
+                if not isinstance(
+                    content,
+                    dict,
+                ):
+                    invalid_task_ids.add(
+                        task.id
+                    )
+
+                    invalid_artifact_ids.add(
+                        artifact_id
+                    )
+
+                    reasons.append(
+                        "CODE artifact content "
+                        "is not an object."
+                    )
+
+                    continue
+
+                run_commands = (
+                    content.get(
+                        "run_commands",
+                        [],
+                    )
+                )
+
+                test_commands = (
+                    content.get(
+                        "test_commands",
+                        [],
+                    )
+                )
+
+                if not isinstance(
+                    run_commands,
+                    list,
+                ):
+                    invalid_task_ids.add(
+                        task.id
+                    )
+
+                    invalid_artifact_ids.add(
+                        artifact_id
+                    )
+
+                    reasons.append(
+                        "CODE artifact has "
+                        "invalid run_commands."
+                    )
+
+                    continue
+
+                if not isinstance(
+                    test_commands,
+                    list,
+                ):
+                    invalid_task_ids.add(
+                        task.id
+                    )
+
+                    invalid_artifact_ids.add(
+                        artifact_id
+                    )
+
+                    reasons.append(
+                        "CODE artifact has "
+                        "invalid test_commands."
+                    )
+
+                    continue
+
+                commands = [
+                    *run_commands,
+                    *test_commands,
+                ]
+
+                try:
+                    for command in commands:
+                        if not isinstance(
+                            command,
+                            str,
+                        ):
+                            raise ExecutionError(
+                                "Command must be "
+                                "a string."
+                            )
+
+                        executor.validate_command(
+                            command
+                        )
+
+                except ExecutionError as exc:
+                    invalid_task_ids.add(
+                        task.id
+                    )
+
+                    invalid_artifact_ids.add(
+                        artifact_id
+                    )
+
+                    reasons.append(
+                        str(exc)
+                    )
+
+        if not invalid_task_ids:
+            return {
+                "invalidated": False,
+                "task_ids": [],
+                "artifact_ids": [],
+                "reset_task_ids": [],
+                "reasons": [],
+            }
+
+        affected_task_ids = set(
+            invalid_task_ids
+        )
+
+        for task in state.tasks.values():
+            if self._task_depends_on_any(
+                task,
+                invalid_task_ids,
+                state,
+            ):
+                affected_task_ids.add(
+                    task.id
+                )
+
+        artifacts_to_remove = set(
+            invalid_artifact_ids
+        )
+
+        for task_id in affected_task_ids:
+            task = state.tasks.get(
+                task_id
+            )
+
+            if task is None:
+                continue
+
+            artifacts_to_remove.update(
+                task.output_artifact_ids
+            )
+
+            task.output_artifact_ids = []
+            task.status = TaskStatus.PENDING
+
+        for artifact_id in (
+            artifacts_to_remove
+        ):
+            state.artifacts.pop(
+                artifact_id,
+                None,
+            )
+
+        return {
+            "invalidated": True,
+            "task_ids": sorted(
+                invalid_task_ids
+            ),
+            "artifact_ids": sorted(
+                invalid_artifact_ids
+            ),
+            "reset_task_ids": sorted(
+                affected_task_ids
+            ),
+            "reasons": reasons,
+        }
+
     def restore_run(
         self,
         run_id: str,
@@ -810,6 +1083,13 @@ class NexusEngine:
                         TaskStatus.PENDING
                     )
 
+        runtime_recovery = (
+            self
+            ._invalidate_runtime_incompatible_code(
+                state
+            )
+        )
+
         state.metadata[
             "recovered_from_checkpoint"
         ] = {
@@ -827,6 +1107,31 @@ class NexusEngine:
                 latest.checkpoint_type.value
                 if latest is not None
                 else None
+            ),
+            "runtime_artifacts_invalidated": (
+                runtime_recovery[
+                    "invalidated"
+                ]
+            ),
+            "runtime_invalidated_task_ids": (
+                runtime_recovery[
+                    "task_ids"
+                ]
+            ),
+            "runtime_invalidated_artifact_ids": (
+                runtime_recovery[
+                    "artifact_ids"
+                ]
+            ),
+            "runtime_reset_task_ids": (
+                runtime_recovery[
+                    "reset_task_ids"
+                ]
+            ),
+            "runtime_invalidation_reasons": (
+                runtime_recovery[
+                    "reasons"
+                ]
             ),
         }
 
