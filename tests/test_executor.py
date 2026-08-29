@@ -174,3 +174,41 @@ def test_executor_times_out(
 
     assert result.exit_code == -1
     assert result.timed_out is True
+
+
+def test_pytest_isolated_from_parent_project_config(
+    tmp_path,
+):
+    workspace = tmp_path / "generated_project"
+    workspace.mkdir()
+
+    (workspace / "app.py").write_text(
+        "def run():\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+
+    tests_dir = workspace / "tests"
+    tests_dir.mkdir()
+
+    (
+        tests_dir / "test_app.py"
+    ).write_text(
+        "from app import run\n\n"
+        "def test_run():\n"
+        "    assert run() is True\n",
+        encoding="utf-8",
+    )
+
+    executor = CommandExecutor(
+        timeout_seconds=10
+    )
+
+    result = executor.execute(
+        "pytest -q",
+        workspace,
+    )
+
+    assert result.exit_code == 0
+    assert result.timed_out is False
+    assert "1 passed" in result.stdout

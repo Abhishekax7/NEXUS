@@ -1,3 +1,4 @@
+import os
 import shlex
 import subprocess
 
@@ -170,10 +171,80 @@ class CommandExecutor:
             command
         )
 
+        env = os.environ.copy()
+
+        existing_pythonpath = env.get(
+            "PYTHONPATH"
+        )
+
+        workspace_pythonpath = str(
+            workspace
+        )
+
+        if existing_pythonpath:
+            env["PYTHONPATH"] = (
+                workspace_pythonpath
+                + os.pathsep
+                + existing_pythonpath
+            )
+        else:
+            env["PYTHONPATH"] = (
+                workspace_pythonpath
+            )
+
+        is_direct_pytest = (
+            args
+            and args[0] == "pytest"
+        )
+
+        is_python_pytest = (
+            len(args) >= 3
+            and args[0]
+            in {
+                "python",
+                "python3",
+            }
+            and args[1:3]
+            == [
+                "-m",
+                "pytest",
+            ]
+        )
+
+        if (
+            is_direct_pytest
+            or is_python_pytest
+        ):
+            local_pytest_configs = (
+                "pytest.ini",
+                "pyproject.toml",
+                "setup.cfg",
+                "tox.ini",
+            )
+
+            has_local_config = any(
+                (
+                    workspace
+                    / config_name
+                ).exists()
+                for config_name
+                in local_pytest_configs
+            )
+
+            if not has_local_config:
+                args = [
+                    *args,
+                    "-c",
+                    "/dev/null",
+                    "--rootdir",
+                    str(workspace),
+                ]
+
         try:
             completed = subprocess.run(
                 args,
                 cwd=workspace,
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
