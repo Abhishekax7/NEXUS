@@ -302,3 +302,273 @@ def test_repair_loop_stops_after_retry_limit(
         is False
     )
 
+
+
+class ProgressiveDebugger:
+    def __init__(self):
+        self.calls = 0
+        self.observed_contents = []
+
+    def execute(
+        self,
+        task,
+        state,
+    ):
+        self.calls += 1
+
+        code_artifact = state.artifacts[
+            task.input_artifact_ids[0]
+        ]
+
+        app_file = next(
+            file_data
+            for file_data
+            in code_artifact.content["files"]
+            if file_data["path"] == "app.py"
+        )
+
+        current_content = app_file["content"]
+        self.observed_contents.append(
+            current_content
+        )
+
+        if self.calls == 1:
+            new_content = (
+                "def run():\n"
+                "    return None\n"
+            )
+        else:
+            if "return None" not in current_content:
+                new_content = (
+                    "def run():\n"
+                    "    return False\n"
+                )
+            else:
+                new_content = (
+                    "def run():\n"
+                    "    return True\n"
+                )
+
+        return Artifact(
+            type=ArtifactType.DEBUG_REPORT,
+            name="debug_repair_report",
+            content={
+                "root_cause":
+                    "Incorrect return value",
+                "failure_summary":
+                    "Expected True",
+                "patches": [
+                    {
+                        "path": "app.py",
+                        "new_content":
+                            new_content,
+                        "reason":
+                            "Progressive repair",
+                    }
+                ],
+                "retry_test_commands": [
+                    "pytest -v"
+                ],
+                "confidence": 0.9,
+                "notes": [
+                    "Regression test"
+                ],
+            },
+            created_by=AgentRole.DEBUGGER,
+        )
+
+
+def test_second_repair_sees_first_patch(
+    tmp_path,
+):
+    from app.agents.tester import TesterAgent
+    from app.tools.patcher import PatchApplicator
+
+    state = NexusState(
+        user_request="Build app"
+    )
+
+    code_artifact = create_code_artifact()
+    state.add_artifact(
+        code_artifact
+    )
+
+    tester = TesterAgent(
+        workspace_writer=FakeWorkspaceWriter(
+            tmp_path
+        ),
+        executor=StateAwareExecutor(),
+    )
+
+    debugger = ProgressiveDebugger()
+
+    loop = RepairLoop(
+        tester=tester,
+        debugger=debugger,
+        patcher=PatchApplicator(
+            root=str(tmp_path)
+        ),
+        max_repairs=2,
+    )
+
+    result = loop.run(
+        state
+    )
+
+    assert result.passed is True
+    assert result.attempts == 2
+    assert debugger.calls == 2
+
+    assert "return False" in (
+        debugger.observed_contents[0]
+    )
+
+    assert "return None" in (
+        debugger.observed_contents[1]
+    )
+
+    app_file = next(
+        file_data
+        for file_data
+        in code_artifact.content["files"]
+        if file_data["path"] == "app.py"
+    )
+
+    assert "return True" in (
+        app_file["content"]
+    )
+
+
+class ProgressiveDebugger:
+    def __init__(self):
+        self.calls = 0
+        self.observed_contents = []
+
+    def execute(
+        self,
+        task,
+        state,
+    ):
+        self.calls += 1
+
+        code_artifact = state.artifacts[
+            task.input_artifact_ids[0]
+        ]
+
+        app_file = next(
+            file_data
+            for file_data
+            in code_artifact.content["files"]
+            if file_data["path"] == "app.py"
+        )
+
+        current_content = app_file["content"]
+        self.observed_contents.append(
+            current_content
+        )
+
+        if self.calls == 1:
+            new_content = (
+                "def run():\n"
+                "    return None\n"
+            )
+        else:
+            if "return None" not in current_content:
+                new_content = (
+                    "def run():\n"
+                    "    return False\n"
+                )
+            else:
+                new_content = (
+                    "def run():\n"
+                    "    return True\n"
+                )
+
+        return Artifact(
+            type=ArtifactType.DEBUG_REPORT,
+            name="debug_repair_report",
+            content={
+                "root_cause":
+                    "Incorrect return value",
+                "failure_summary":
+                    "Expected True",
+                "patches": [
+                    {
+                        "path": "app.py",
+                        "new_content":
+                            new_content,
+                        "reason":
+                            "Progressive repair",
+                    }
+                ],
+                "retry_test_commands": [
+                    "pytest -v"
+                ],
+                "confidence": 0.9,
+                "notes": [
+                    "Regression test"
+                ],
+            },
+            created_by=AgentRole.DEBUGGER,
+        )
+
+
+def test_second_repair_sees_first_patch(
+    tmp_path,
+):
+    from app.agents.tester import TesterAgent
+    from app.tools.patcher import PatchApplicator
+
+    state = NexusState(
+        user_request="Build app"
+    )
+
+    code_artifact = create_code_artifact()
+    state.add_artifact(
+        code_artifact
+    )
+
+    tester = TesterAgent(
+        workspace_writer=FakeWorkspaceWriter(
+            tmp_path
+        ),
+        executor=StateAwareExecutor(),
+    )
+
+    debugger = ProgressiveDebugger()
+
+    loop = RepairLoop(
+        tester=tester,
+        debugger=debugger,
+        patcher=PatchApplicator(
+            root=str(tmp_path)
+        ),
+        max_repairs=2,
+    )
+
+    result = loop.run(
+        state
+    )
+
+    assert result.passed is True
+    assert result.attempts == 2
+    assert debugger.calls == 2
+
+    assert "return False" in (
+        debugger.observed_contents[0]
+    )
+
+    assert "return None" in (
+        debugger.observed_contents[1]
+    )
+
+    app_file = next(
+        file_data
+        for file_data
+        in code_artifact.content["files"]
+        if file_data["path"] == "app.py"
+    )
+
+    assert "return True" in (
+        app_file["content"]
+    )

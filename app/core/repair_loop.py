@@ -58,6 +58,80 @@ class RepairLoop:
             "CODE artifact not found."
         )
 
+    def _sync_code_artifact(
+        self,
+        code_artifact: Artifact,
+        debug_artifact: Artifact,
+    ) -> None:
+        files = code_artifact.content.get(
+            "files"
+        )
+
+        if not isinstance(files, list):
+            raise RepairLoopError(
+                "CODE artifact does not contain "
+                "a valid files list."
+            )
+
+        files_by_path = {}
+
+        for file_data in files:
+            if not isinstance(file_data, dict):
+                continue
+
+            file_path = file_data.get(
+                "path"
+            )
+
+            if isinstance(file_path, str):
+                files_by_path[file_path] = (
+                    file_data
+                )
+
+        patches = debug_artifact.content.get(
+            "patches"
+        )
+
+        if not isinstance(patches, list):
+            raise RepairLoopError(
+                "DEBUG_REPORT does not contain "
+                "a valid patches list."
+            )
+
+        for patch in patches:
+            if not isinstance(patch, dict):
+                raise RepairLoopError(
+                    "DEBUG_REPORT contains an "
+                    "invalid patch."
+                )
+
+            patch_path = patch.get(
+                "path"
+            )
+            new_content = patch.get(
+                "new_content"
+            )
+
+            if patch_path not in files_by_path:
+                raise RepairLoopError(
+                    "Patched file is not present "
+                    "in CODE artifact: "
+                    f"{patch_path}"
+                )
+
+            if not isinstance(
+                new_content,
+                str,
+            ):
+                raise RepairLoopError(
+                    "Patched CODE content must "
+                    "be a string."
+                )
+
+            files_by_path[
+                patch_path
+            ]["content"] = new_content
+
     def run(
         self,
         state: NexusState,
@@ -128,6 +202,11 @@ class RepairLoop:
             self.patcher.apply_debug_artifact(
                 debug_artifact,
                 state,
+            )
+
+            self._sync_code_artifact(
+                code_artifact,
+                debug_artifact,
             )
 
             test_artifact = self.tester.execute(
