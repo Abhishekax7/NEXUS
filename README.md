@@ -6,6 +6,14 @@ Instead of relying on a single LLM call to generate code, NEXUS coordinates spec
 
 The project explores production-oriented agentic AI architecture: how autonomous agents can plan work, exchange structured artifacts, execute tools safely, recover from failures, and evaluate their own results.
 
+## Live Deployment
+
+- **Live API:** https://nexus-j0jr.onrender.com/
+- **Interactive API Documentation:** https://nexus-j0jr.onrender.com/docs
+- **Health Check:** https://nexus-j0jr.onrender.com/healthz
+
+> Deployed on Render. The free instance may spin down after inactivity, so the first request can take approximately 50 seconds or more.
+
 ---
 
 ## Core Capabilities
