@@ -58,6 +58,16 @@ def create_app(
         ),
     )
 
+    @app.get("/")
+    def root():
+        return {
+            "name": "NEXUS",
+            "description": "Autonomous AI Engineering System",
+            "status": "online",
+            "docs": "/docs",
+            "health": "/healthz",
+        }
+
     # ---------------------------------
     # Health
     # ---------------------------------
