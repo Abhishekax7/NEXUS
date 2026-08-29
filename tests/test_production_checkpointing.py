@@ -981,3 +981,245 @@ def test_restore_preserves_runtime_compatible_code(
         )
         is False
     )
+
+
+def test_restore_reopens_completed_failed_repair_path(
+    tmp_path,
+):
+    db_path = (
+        tmp_path
+        / "repair_recovery.db"
+    )
+
+    service = build_checkpoint_service(
+        db_path
+    )
+
+    state = NexusState(
+        user_request="Build recoverable app"
+    )
+
+    coding_task = AgentTask(
+        title="Implement application",
+        description="Generate code.",
+        assigned_agent=AgentRole.CODER,
+    )
+
+    testing_task = AgentTask(
+        title="Test implementation",
+        description="Run tests.",
+        assigned_agent=AgentRole.TESTER,
+        dependencies=[
+            coding_task.id,
+        ],
+    )
+
+    critic_task = AgentTask(
+        title="Critique implementation",
+        description="Review result.",
+        assigned_agent=AgentRole.CRITIC,
+        dependencies=[
+            testing_task.id,
+        ],
+    )
+
+    state.add_task(coding_task)
+    state.add_task(testing_task)
+    state.add_task(critic_task)
+
+    code_artifact = Artifact(
+        type=ArtifactType.CODE,
+        name="generated_code_bundle",
+        content={
+            "project_name": "demo",
+            "summary": "Demo",
+            "files": [],
+            "dependencies": [],
+            "run_commands": [
+                "python app.py"
+            ],
+            "test_commands": [
+                "pytest -q"
+            ],
+            "implementation_notes": [],
+        },
+        created_by=AgentRole.CODER,
+    )
+
+    failed_test = Artifact(
+        type=ArtifactType.TEST_RESULT,
+        name="failed_test_report",
+        content={
+            "passed": False,
+        },
+        created_by=AgentRole.TESTER,
+    )
+
+    critic_artifact = Artifact(
+        type=ArtifactType.EVALUATION,
+        name="final_quality_gate",
+        content={
+            "verdict": "revise",
+        },
+        created_by=AgentRole.CRITIC,
+    )
+
+    state.add_artifact(code_artifact)
+    state.add_artifact(failed_test)
+    state.add_artifact(critic_artifact)
+
+    coding_task.output_artifact_ids = [
+        code_artifact.id
+    ]
+    testing_task.output_artifact_ids = [
+        failed_test.id
+    ]
+    critic_task.output_artifact_ids = [
+        critic_artifact.id
+    ]
+
+    coding_task.status = TaskStatus.COMPLETED
+    testing_task.status = TaskStatus.COMPLETED
+    critic_task.status = TaskStatus.COMPLETED
+
+    state.failed = True
+    state.completed = False
+    state.errors.append(
+        "Autonomous repair exhausted its "
+        "retry budget after 2 repair attempts."
+    )
+
+    class FakeRecoveryInfo:
+        status = RecoveryStatus.FAILED
+
+    class FakeCheckpoint:
+        id = "repair-checkpoint"
+        sequence = 7
+
+        class checkpoint_type:
+            value = "workflow_failed"
+
+    class FakeCheckpointService:
+        def recovery_info(
+            self,
+            run_id,
+        ):
+            return FakeRecoveryInfo()
+
+        def restore_state(
+            self,
+            run_id,
+        ):
+            return state.model_copy(
+                deep=True
+            )
+
+        def latest_checkpoint(
+            self,
+            run_id,
+        ):
+            return FakeCheckpoint()
+
+    registry = AgentRegistry()
+
+    recovery_engine = NexusEngine(
+        registry=registry,
+        checkpoint_service=(
+            FakeCheckpointService()
+        ),
+        replanner=None,
+        repair_loop=None,
+        memory_manager=None,
+        evaluation_service=None,
+        observability_service=None,
+    )
+
+    recovered = recovery_engine.restore_run(
+        state.run_id,
+        allow_failed=True,
+    )
+
+    assert recovered.failed is False
+    assert recovered.completed is False
+
+    assert (
+        recovered.tasks[
+            coding_task.id
+        ].status
+        == TaskStatus.COMPLETED
+    )
+
+    assert (
+        recovered.tasks[
+            testing_task.id
+        ].status
+        == TaskStatus.PENDING
+    )
+
+    assert (
+        recovered.tasks[
+            critic_task.id
+        ].status
+        == TaskStatus.PENDING
+    )
+
+    assert (
+        recovered.tasks[
+            coding_task.id
+        ].output_artifact_ids
+        == [code_artifact.id]
+    )
+
+    assert (
+        recovered.tasks[
+            testing_task.id
+        ].output_artifact_ids
+        == []
+    )
+
+    assert (
+        recovered.tasks[
+            critic_task.id
+        ].output_artifact_ids
+        == []
+    )
+
+    assert (
+        code_artifact.id
+        in recovered.artifacts
+    )
+
+    assert (
+        failed_test.id
+        not in recovered.artifacts
+    )
+
+    assert (
+        critic_artifact.id
+        not in recovered.artifacts
+    )
+
+    metadata = recovered.metadata[
+        "recovered_from_checkpoint"
+    ]
+
+    assert (
+        metadata[
+            "repair_failure_reopened"
+        ]
+        is True
+    )
+
+    assert (
+        testing_task.id
+        in metadata[
+            "repair_failure_root_task_ids"
+        ]
+    )
+
+    assert (
+        critic_task.id
+        in metadata[
+            "repair_failure_reset_task_ids"
+        ]
+    )

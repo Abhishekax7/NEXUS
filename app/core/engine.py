@@ -985,6 +985,144 @@ class NexusEngine:
             "reasons": reasons,
         }
 
+    def _reset_repair_failed_tasks(
+        self,
+        state: NexusState,
+    ) -> dict:
+        """
+        Reopen a repair-exhausted workflow whose
+        normal task statuses were already marked
+        completed before the repair loop failed.
+        """
+
+        repair_failure = any(
+            (
+                "Autonomous repair exhausted its "
+                "retry budget"
+            )
+            in error
+            for error in state.errors
+            if isinstance(error, str)
+        )
+
+        if not repair_failure:
+            return {
+                "reset": False,
+                "root_task_ids": [],
+                "reset_task_ids": [],
+                "artifact_ids": [],
+            }
+
+        root_task_ids: set[str] = set()
+
+        for task in state.tasks.values():
+            if (
+                task.assigned_agent
+                != AgentRole.TESTER
+            ):
+                continue
+
+            if (
+                task.status
+                != TaskStatus.COMPLETED
+            ):
+                continue
+
+            latest_test_artifact = None
+
+            for artifact_id in reversed(
+                task.output_artifact_ids
+            ):
+                artifact = state.artifacts.get(
+                    artifact_id
+                )
+
+                if artifact is None:
+                    continue
+
+                if (
+                    artifact.type
+                    == ArtifactType.TEST_RESULT
+                ):
+                    latest_test_artifact = (
+                        artifact
+                    )
+                    break
+
+            if latest_test_artifact is None:
+                continue
+
+            content = (
+                latest_test_artifact.content
+            )
+
+            if (
+                isinstance(content, dict)
+                and content.get("passed")
+                is False
+            ):
+                root_task_ids.add(
+                    task.id
+                )
+
+        if not root_task_ids:
+            return {
+                "reset": False,
+                "root_task_ids": [],
+                "reset_task_ids": [],
+                "artifact_ids": [],
+            }
+
+        affected_task_ids = set(
+            root_task_ids
+        )
+
+        for task in state.tasks.values():
+            if self._task_depends_on_any(
+                task,
+                root_task_ids,
+                state,
+            ):
+                affected_task_ids.add(
+                    task.id
+                )
+
+        artifacts_to_remove: set[str] = set()
+
+        for task_id in affected_task_ids:
+            task = state.tasks.get(
+                task_id
+            )
+
+            if task is None:
+                continue
+
+            artifacts_to_remove.update(
+                task.output_artifact_ids
+            )
+
+            task.output_artifact_ids = []
+            task.status = TaskStatus.PENDING
+
+        for artifact_id in artifacts_to_remove:
+            state.artifacts.pop(
+                artifact_id,
+                None,
+            )
+
+        return {
+            "reset": True,
+            "root_task_ids": sorted(
+                root_task_ids
+            ),
+            "reset_task_ids": sorted(
+                affected_task_ids
+            ),
+            "artifact_ids": sorted(
+                artifacts_to_remove
+            ),
+        }
+
     def restore_run(
         self,
         run_id: str,
@@ -1064,6 +1202,13 @@ class NexusEngine:
             )
         )
 
+        repair_recovery = {
+            "reset": False,
+            "root_task_ids": [],
+            "reset_task_ids": [],
+            "artifact_ids": [],
+        }
+
         if (
             info.status
             == RecoveryStatus.FAILED
@@ -1071,6 +1216,8 @@ class NexusEngine:
         ):
             state.failed = False
             state.completed = False
+
+            failed_task_reset = False
 
             for task in (
                 state.tasks.values()
@@ -1082,6 +1229,14 @@ class NexusEngine:
                     task.status = (
                         TaskStatus.PENDING
                     )
+                    failed_task_reset = True
+
+            if not failed_task_reset:
+                repair_recovery = (
+                    self._reset_repair_failed_tasks(
+                        state
+                    )
+                )
 
         runtime_recovery = (
             self
@@ -1131,6 +1286,26 @@ class NexusEngine:
             "runtime_invalidation_reasons": (
                 runtime_recovery[
                     "reasons"
+                ]
+            ),
+            "repair_failure_reopened": (
+                repair_recovery[
+                    "reset"
+                ]
+            ),
+            "repair_failure_root_task_ids": (
+                repair_recovery[
+                    "root_task_ids"
+                ]
+            ),
+            "repair_failure_reset_task_ids": (
+                repair_recovery[
+                    "reset_task_ids"
+                ]
+            ),
+            "repair_failure_removed_artifact_ids": (
+                repair_recovery[
+                    "artifact_ids"
                 ]
             ),
         }
