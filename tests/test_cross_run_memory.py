@@ -31,7 +31,7 @@ class CapturingLLM:
         json_mode=False,
         max_tokens=None,
         json_schema=None,
-        Schema_name="nexus_structured_output",
+        schema_name="nexus_structured_output",
         strict_schema=True,
         reasoning_effort=None,
     ):

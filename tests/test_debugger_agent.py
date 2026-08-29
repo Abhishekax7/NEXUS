@@ -26,6 +26,7 @@ class FakeDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         self.last_user_prompt = user_prompt
 
@@ -69,6 +70,7 @@ class RepairingDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         self.calls += 1
 
@@ -94,6 +96,7 @@ class UnknownFileDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         data = json.loads(
             FakeDebuggerLLM().generate(
@@ -114,6 +117,7 @@ class TraversalDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         data = json.loads(
             FakeDebuggerLLM().generate(
@@ -134,6 +138,7 @@ class AbsolutePathDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         data = json.loads(
             FakeDebuggerLLM().generate(
@@ -154,6 +159,7 @@ class DuplicatePatchDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         data = json.loads(
             FakeDebuggerLLM().generate(
@@ -183,6 +189,7 @@ class AlwaysInvalidDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         return "{}"
 
@@ -837,6 +844,7 @@ class MavenCommandDebuggerLLM(FakeDebuggerLLM):
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         data = json.loads(
             super().generate(
@@ -863,6 +871,7 @@ class UnsupportedThenRepairingDebuggerLLM:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = False,
+        **kwargs,
     ) -> str:
         self.calls += 1
         self.prompts.append(user_prompt)
@@ -983,3 +992,40 @@ def test_debugger_exposes_runtime_capabilities():
         "python3",
         "pytest",
     }
+
+
+def test_debugger_strict_schema_limits_patch_paths():
+    state, task = build_state_and_task()
+
+    agent = DebuggerAgent(
+        llm_client=UnknownFileDebuggerLLM(),
+        max_validation_retries=0,
+    )
+
+    code_artifact = agent._get_artifact(
+        task,
+        state,
+        ArtifactType.CODE,
+    )
+
+    schema = agent._build_debug_schema(
+        code_artifact
+    )
+
+    allowed_paths = (
+        schema["$defs"]
+        ["FilePatch"]
+        ["properties"]
+        ["path"]
+        ["enum"]
+    )
+
+    expected_paths = sorted(
+        file_data["path"]
+        for file_data
+        in code_artifact.content["files"]
+    )
+
+    assert allowed_paths == expected_paths
+    assert "unknown.py" not in allowed_paths
+    assert "app/__init__.py" not in allowed_paths

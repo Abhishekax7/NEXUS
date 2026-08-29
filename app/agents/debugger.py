@@ -3,6 +3,7 @@ from typing import Optional
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationError,
 )
@@ -21,12 +22,20 @@ from app.tools.executor import CommandExecutor
 
 
 class FilePatch(BaseModel):
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
     path: str = Field(min_length=1)
     new_content: str = Field(min_length=1)
     reason: str = Field(min_length=1)
 
 
 class DebugReport(BaseModel):
+
+    model_config = ConfigDict(
+        extra="forbid"
+    )
     root_cause: str = Field(
         min_length=1
     )
@@ -175,6 +184,52 @@ class DebuggerAgent(BaseAgent):
         raise DebugGenerationError(
             f"{artifact_type.value} artifact not found."
         )
+
+    def _build_debug_schema(
+        self,
+        code_artifact: Artifact,
+    ) -> dict:
+        existing_paths = sorted({
+            file_data["path"]
+            for file_data
+            in code_artifact.content.get(
+                "files",
+                [],
+            )
+            if isinstance(
+                file_data,
+                dict,
+            )
+            and isinstance(
+                file_data.get("path"),
+                str,
+            )
+            and file_data["path"].strip()
+        })
+
+        if not existing_paths:
+            raise DebugGenerationError(
+                "CODE artifact contains no valid files."
+            )
+
+        schema = DebugReport.model_json_schema()
+
+        try:
+            path_schema = (
+                schema["$defs"]
+                ["FilePatch"]
+                ["properties"]
+                ["path"]
+            )
+        except KeyError as exc:
+            raise DebugGenerationError(
+                "Unable to constrain debugger "
+                "patch-path schema."
+            ) from exc
+
+        path_schema["enum"] = existing_paths
+
+        return schema
 
     def _validate_patch_paths(
         self,
@@ -439,6 +494,31 @@ class DebuggerAgent(BaseAgent):
             )
         )
 
+        debug_schema = self._build_debug_schema(
+            code_artifact
+        )
+
+        allowed_patch_paths = sorted({
+            file_data["path"]
+            for file_data
+            in code_artifact.content.get(
+                "files",
+                [],
+            )
+            if isinstance(
+                file_data,
+                dict,
+            )
+            and isinstance(
+                file_data.get("path"),
+                str,
+            )
+        })
+
+        allowed_patch_paths_text = ", ".join(
+            allowed_patch_paths
+        )
+
         system_prompt = (
             "You are the Debugger Agent inside "
             "NEXUS, an autonomous AI software "
@@ -486,6 +566,10 @@ reason
 Rules:
 
 - only patch files that already exist in GENERATED CODE
+- EXACT ALLOWED PATCH PATHS:
+  {allowed_patch_paths_text}
+- patches[].path MUST be one of those exact paths
+- never infer or invent package files such as __init__.py
 - patch paths must be relative
 - never use absolute paths
 - never use ../ traversal
@@ -519,7 +603,11 @@ Rules:
             raw_output = self.llm.generate(
                 system_prompt=system_prompt,
                 user_prompt=prompt,
-                json_mode=True,
+                json_mode=False,
+                json_schema=debug_schema,
+                schema_name="nexus_debug_report",
+                strict_schema=True,
+                reasoning_effort="low",
             )
 
             try:
@@ -552,6 +640,14 @@ Rules:
                             bool(memory_context),
                         "runtime_capability_aware":
                             True,
+                        "structured_output":
+                            True,
+                        "strict_schema":
+                            True,
+                        "schema_name":
+                            "nexus_debug_report",
+                        "reasoning_effort":
+                            "low",
                         "allowed_executables":
                             sorted(
                                 self.allowed_executables
@@ -609,6 +705,10 @@ reason
 Rules:
 
 - patch only files that already exist
+- EXACT ALLOWED PATCH PATHS:
+  {allowed_patch_paths_text}
+- patches[].path MUST be one of those exact paths
+- never infer or invent package files such as __init__.py
 - absolute paths are forbidden
 - ../ traversal is forbidden
 - duplicate patch paths are forbidden
