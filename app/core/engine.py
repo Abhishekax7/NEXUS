@@ -995,22 +995,28 @@ class NexusEngine:
         completed before the repair loop failed.
         """
 
-        repair_failure = any(
-            (
-                "Autonomous repair exhausted its "
-                "retry budget"
-            )
-            in error
-            for error in state.errors
-            if isinstance(error, str)
+        repair_failure_marker = (
+            "Autonomous repair exhausted its "
+            "retry budget"
         )
 
-        if not repair_failure:
+        repair_errors = [
+            error
+            for error in state.errors
+            if (
+                isinstance(error, str)
+                and repair_failure_marker
+                in error
+            )
+        ]
+
+        if not repair_errors:
             return {
                 "reset": False,
                 "root_task_ids": [],
                 "reset_task_ids": [],
                 "artifact_ids": [],
+                "resolved_errors": [],
             }
 
         root_task_ids: set[str] = set()
@@ -1071,6 +1077,7 @@ class NexusEngine:
                 "root_task_ids": [],
                 "reset_task_ids": [],
                 "artifact_ids": [],
+                "resolved_errors": [],
             }
 
         affected_task_ids = set(
@@ -1110,6 +1117,16 @@ class NexusEngine:
                 None,
             )
 
+        state.errors = [
+            error
+            for error in state.errors
+            if not (
+                isinstance(error, str)
+                and repair_failure_marker
+                in error
+            )
+        ]
+
         return {
             "reset": True,
             "root_task_ids": sorted(
@@ -1121,6 +1138,7 @@ class NexusEngine:
             "artifact_ids": sorted(
                 artifacts_to_remove
             ),
+            "resolved_errors": repair_errors,
         }
 
     def restore_run(
@@ -1207,6 +1225,7 @@ class NexusEngine:
             "root_task_ids": [],
             "reset_task_ids": [],
             "artifact_ids": [],
+            "resolved_errors": [],
         }
 
         if (
@@ -1306,6 +1325,11 @@ class NexusEngine:
             "repair_failure_removed_artifact_ids": (
                 repair_recovery[
                     "artifact_ids"
+                ]
+            ),
+            "repair_failure_resolved_errors": (
+                repair_recovery[
+                    "resolved_errors"
                 ]
             ),
         }

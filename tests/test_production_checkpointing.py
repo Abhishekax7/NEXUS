@@ -1084,10 +1084,17 @@ def test_restore_reopens_completed_failed_repair_path(
 
     state.failed = True
     state.completed = False
-    state.errors.append(
+    unrelated_error = (
+        "Historical unrelated warning."
+    )
+
+    repair_error = (
         "Autonomous repair exhausted its "
         "retry budget after 2 repair attempts."
     )
+
+    state.errors.append(unrelated_error)
+    state.errors.append(repair_error)
 
     class FakeRecoveryInfo:
         status = RecoveryStatus.FAILED
@@ -1222,4 +1229,15 @@ def test_restore_reopens_completed_failed_repair_path(
         in metadata[
             "repair_failure_reset_task_ids"
         ]
+    )
+
+    assert recovered.errors == [
+        unrelated_error
+    ]
+
+    assert (
+        metadata[
+            "repair_failure_resolved_errors"
+        ]
+        == [repair_error]
     )
